@@ -257,7 +257,7 @@ class TunnelClient:
 
             # Start ICMP response handler thread
             self.icmp_thread = threading.Thread(
-                target=start_icmp_listener(
+                target=lambda: start_icmp_listener(
                     handle_icmp_packet=self.handle_icmp_response,
                     stop_filter=lambda x: not self.running,
                 ),
