@@ -16,9 +16,6 @@ from scapy.all import Packet, Raw
 from scapy.layers.inet import ICMP, IP
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 

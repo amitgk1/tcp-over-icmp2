@@ -130,7 +130,7 @@ class TunnelServer:
             if conn_state.sock is None:
                 # Create TCP connection to target
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(10)
+                # sock.settimeout(10)
 
                 logger.info(
                     f"Connecting to {conn_state.remote_addr[0]}:{conn_state.remote_addr[1]}"
@@ -267,7 +267,7 @@ class TunnelServer:
             sock = conn_state.sock
             if sock is None:
                 return
-            sock.settimeout(1.0)
+            # sock.settimeout(1.0)
 
             while self.running and conn_state.state == "ESTABLISHED":
                 try:

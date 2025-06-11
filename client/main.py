@@ -242,6 +242,8 @@ class TunnelClient:
                     conn_state.state = "ESTABLISHED"
                 elif header.flags & TunnelFlags.FIN:
                     conn_state.state = "CLOSED"
+                    # TODO: Amit check if necessary...
+                    self.conn_manager.remove_connection(header.conn_id)
                 elif header.flags & TunnelFlags.RST:
                     conn_state.state = "CLOSED"
                     self.conn_manager.remove_connection(header.conn_id)
@@ -264,7 +266,7 @@ class TunnelClient:
         try:
             # Create raw ICMP socket
             self.icmp_socket = TunnelProtocol.create_raw_socket()
-            self.icmp_socket.settimeout(1.0)
+            # self.icmp_socket.settimeout(1.0)
 
             # Setup iptables rules
             self.setup_iptables_rules()
