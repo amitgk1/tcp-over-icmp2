@@ -10,9 +10,9 @@ import struct
 import time
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from scapy.all import Packet, Raw
+from scapy.all import IPSession, Packet, Raw, sniff
 from scapy.layers.inet import ICMP, IP
 
 # Configure logging
@@ -150,16 +150,16 @@ class TunnelProtocol:
             logger.error(f"Error parsing ICMP packet: {e}")
             return None
 
-    @staticmethod
-    def create_raw_socket() -> socket.socket:
-        """Create raw socket for ICMP"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-            return sock
-        except PermissionError:
-            logger.error("Raw socket creation failed. Run as root!")
-            raise
+    # @staticmethod
+    # def create_raw_socket() -> socket.socket:
+    #     """Create raw socket for ICMP"""
+    #     try:
+    #         sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    #         sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+    #         return sock
+    #     except PermissionError:
+    #         logger.error("Raw socket creation failed. Run as root!")
+    #         raise
 
     @staticmethod
     def calculate_tcp_checksum(
@@ -255,6 +255,38 @@ def setup_logging(debug: bool = False):
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[logging.StreamHandler(), logging.FileHandler("tunnel.log")],
     )
+
+
+def packet_filter(packet: Packet):
+    """Filter for ICMP packets"""
+    return (
+        packet.haslayer(IP)
+        and packet.haslayer(ICMP)
+        and packet[ICMP].id == TunnelProtocol.ICMP_ID
+    )
+
+
+def start_icmp_listener(
+    handle_icmp_packet: Callable[[ICMP], Optional[Any]],
+    stop_filter: Callable[[Packet], bool],
+):
+    """Start ICMP packet listener"""
+    logger.info("Starting ICMP listener...")
+
+    try:
+        # Use scapy to sniff ICMP packets
+        sniff(
+            session=IPSession,
+            filter="icmp",
+            prn=handle_icmp_packet,
+            lfilter=packet_filter,
+            stop_filter=stop_filter,
+            store=False,
+        )
+    except Exception as e:
+        logger.error(f"Error in ICMP listener: {e}")
+
+    logger.info("ICMP listener stopped")
 
 
 # Utility functions

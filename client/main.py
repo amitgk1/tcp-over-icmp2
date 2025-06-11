@@ -6,15 +6,13 @@ Intercepts TCP packets using netfilterqueue and tunnels them over ICMP
 
 import argparse
 import signal
-import socket
 import subprocess
 import sys
 import threading
-from typing import cast
 
 from netfilterqueue import NetfilterQueue, Packet
 from scapy.all import Raw, send
-from scapy.layers.inet import IP, TCP
+from scapy.layers.inet import ICMP, IP, TCP
 
 from shared import (
     ConnectionManager,
@@ -26,6 +24,7 @@ from shared import (
     is_root,
     logger,
     setup_logging,
+    start_icmp_listener,
 )
 
 
@@ -43,7 +42,6 @@ class TunnelClient:
         self.local_ip = get_local_ip()
 
         # Sockets
-        self.icmp_socket = None
         self.nfqueue = None
 
         # Threading
@@ -173,89 +171,73 @@ class TunnelClient:
             logger.error(f"Error processing packet: {e}")
             packet.accept()
 
-    def handle_icmp_response(self):
+    def handle_icmp_response(self, pkt: ICMP):
         """Handle ICMP responses from server"""
-        logger.info("Starting ICMP response handler...")
+        try:
+            # Parse tunnel data
+            result = TunnelProtocol.parse_icmp_packet(pkt[IP])
+            if not result:
+                logger.error(f"Failed to parse packet: {pkt}")
+                return pkt
 
-        while self.running and self.icmp_socket:
-            try:
-                # Receive ICMP packet
-                data, addr = self.icmp_socket.recvfrom(4096)
+            header, payload = result
 
-                # Parse IP packet, cast for types
-                ip_pkt = cast(IP, IP(data))
+            # Get connection state
+            conn_state = self.conn_manager.get_connection(header.conn_id)
+            if not conn_state:
+                logger.warning(f"Received data for unknown connection {header.conn_id}")
+                return pkt
 
-                # Parse tunnel data
-                result = TunnelProtocol.parse_icmp_packet(ip_pkt)
-                if not result:
-                    continue
+            conn_state.update_activity()
 
-                header, payload = result
+            # Update remote sequence numbers
+            conn_state.remote_seq = header.seq_num
+            conn_state.remote_ack = header.ack_num
 
-                # Get connection state
-                conn_state = self.conn_manager.get_connection(header.conn_id)
-                if not conn_state:
-                    logger.warning(
-                        f"Received data for unknown connection {header.conn_id}"
-                    )
-                    continue
+            # Create TCP response packet
+            tcp_flags = 0
+            if header.flags & TunnelFlags.SYN:
+                tcp_flags |= 0x02
+            if header.flags & TunnelFlags.ACK:
+                tcp_flags |= 0x10
+            if header.flags & TunnelFlags.FIN:
+                tcp_flags |= 0x01
+            if header.flags & TunnelFlags.RST:
+                tcp_flags |= 0x04
 
-                conn_state.update_activity()
-
-                # Update remote sequence numbers
-                conn_state.remote_seq = header.seq_num
-                conn_state.remote_ack = header.ack_num
-
-                # Create TCP response packet
-                tcp_flags = 0
-                if header.flags & TunnelFlags.SYN:
-                    tcp_flags |= 0x02
-                if header.flags & TunnelFlags.ACK:
-                    tcp_flags |= 0x10
-                if header.flags & TunnelFlags.FIN:
-                    tcp_flags |= 0x01
-                if header.flags & TunnelFlags.RST:
-                    tcp_flags |= 0x04
-
-                # Build TCP packet to inject back into network stack
-                tcp_pkt = (
-                    IP(src=conn_state.remote_addr[0], dst=conn_state.local_addr[0])
-                    / TCP(
-                        sport=conn_state.remote_addr[1],
-                        dport=conn_state.local_addr[1],
-                        flags=tcp_flags,
-                        seq=header.seq_num,
-                        ack=header.ack_num,
-                        window=8192,
-                    )
-                    / Raw(load=payload)
+            # Build TCP packet to inject back into network stack
+            tcp_pkt = (
+                IP(src=conn_state.remote_addr[0], dst=conn_state.local_addr[0])
+                / TCP(
+                    sport=conn_state.remote_addr[1],
+                    dport=conn_state.local_addr[1],
+                    flags=tcp_flags,
+                    seq=header.seq_num,
+                    ack=header.ack_num,
+                    window=8192,
                 )
+                / Raw(load=payload)
+            )
 
-                # Send the crafted packet
-                send(tcp_pkt, verbose=False)
-                logger.debug(
-                    f"Injected TCP response: conn_id={header.conn_id}, seq={header.seq_num}, payload_len={len(payload)}"
-                )
+            # Send the crafted packet
+            send(tcp_pkt, verbose=False)
+            logger.debug(
+                f"Injected TCP response: conn_id={header.conn_id}, seq={header.seq_num}, payload_len={len(payload)}"
+            )
 
-                # Handle connection state changes
-                if header.flags & TunnelFlags.SYN and header.flags & TunnelFlags.ACK:
-                    conn_state.state = "ESTABLISHED"
-                elif header.flags & TunnelFlags.FIN:
-                    conn_state.state = "CLOSED"
-                    # TODO: Amit check if necessary...
-                    self.conn_manager.remove_connection(header.conn_id)
-                elif header.flags & TunnelFlags.RST:
-                    conn_state.state = "CLOSED"
-                    self.conn_manager.remove_connection(header.conn_id)
-
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running:
-                    logger.error(f"Error handling ICMP response: {e}")
-                break
-
-        logger.info("ICMP response handler stopped")
+            # Handle connection state changes
+            if header.flags & TunnelFlags.SYN and header.flags & TunnelFlags.ACK:
+                conn_state.state = "ESTABLISHED"
+            elif header.flags & TunnelFlags.FIN:
+                conn_state.state = "CLOSED"
+                # TODO: Amit check if necessary...
+                self.conn_manager.remove_connection(header.conn_id)
+            elif header.flags & TunnelFlags.RST:
+                conn_state.state = "CLOSED"
+                self.conn_manager.remove_connection(header.conn_id)
+        except Exception as e:
+            if self.running:
+                logger.error(f"Error handling ICMP response: {e}")
 
     def start(self):
         """Start the tunnel client"""
@@ -264,10 +246,6 @@ class TunnelClient:
             return False
 
         try:
-            # Create raw ICMP socket
-            self.icmp_socket = TunnelProtocol.create_raw_socket()
-            # self.icmp_socket.settimeout(1.0)
-
             # Setup iptables rules
             self.setup_iptables_rules()
 
@@ -279,7 +257,11 @@ class TunnelClient:
 
             # Start ICMP response handler thread
             self.icmp_thread = threading.Thread(
-                target=self.handle_icmp_response, daemon=True
+                target=start_icmp_listener(
+                    handle_icmp_packet=self.handle_icmp_response,
+                    stop_filter=lambda x: not self.running,
+                ),
+                daemon=True,
             )
             self.icmp_thread.start()
 
@@ -308,13 +290,6 @@ class TunnelClient:
         if self.nfqueue:
             try:
                 self.nfqueue.unbind()
-            except:
-                pass
-
-        # Close sockets
-        if self.icmp_socket:
-            try:
-                self.icmp_socket.close()
             except:
                 pass
 

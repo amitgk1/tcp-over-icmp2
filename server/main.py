@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Dict, List
 
-from scapy.all import Packet, send, sniff
+from scapy.all import send
 from scapy.layers.inet import ICMP, IP
 
 from shared import (
@@ -26,6 +26,7 @@ from shared import (
     is_root,
     logger,
     setup_logging,
+    start_icmp_listener,
 )
 
 
@@ -365,32 +366,6 @@ class TunnelServer:
         except Exception as e:
             logger.error(f"Failed to send ICMP response: {e}")
 
-    def packet_filter(self, packet: Packet):
-        """Filter for ICMP packets"""
-        return (
-            packet.haslayer(IP)
-            and packet.haslayer(ICMP)
-            and packet[ICMP].id == TunnelProtocol.ICMP_ID
-        )
-
-    def start_icmp_listener(self):
-        """Start ICMP packet listener"""
-        logger.info("Starting ICMP listener...")
-
-        try:
-            # Use scapy to sniff ICMP packets
-            sniff(
-                filter="icmp",
-                prn=self.handle_icmp_packet,
-                lfilter=self.packet_filter,
-                stop_filter=lambda x: not self.running,
-            )
-        except Exception as e:
-            if self.running:
-                logger.error(f"Error in ICMP listener: {e}")
-
-        logger.info("ICMP listener stopped")
-
     def cleanup_stale_clients(self):
         """Clean up stale client connections"""
         while self.running:
@@ -435,7 +410,10 @@ class TunnelServer:
             cleanup_thread.start()
 
             # Start ICMP listener (blocking)
-            self.start_icmp_listener()
+            start_icmp_listener(
+                handle_icmp_packet=self.handle_icmp_packet,
+                stop_filter=lambda x: not self.running,
+            )
 
         except KeyboardInterrupt:
             logger.info("Received interrupt signal")
