@@ -37,6 +37,8 @@ class TunnelFlags(IntEnum):
 class TunnelHeader:
     """Custom header for ICMP tunnel protocol"""
 
+    HEADER_SIZE = 16
+
     conn_id: int
     seq_num: int
     ack_num: int
@@ -57,7 +59,9 @@ class TunnelHeader:
     @classmethod
     def unpack(cls, data: bytes) -> "TunnelHeader":
         """Unpack header from bytes"""
-        conn_id, seq_num, ack_num, flags, data_len = struct.unpack("!IIIHH", data[:14])
+        conn_id, seq_num, ack_num, flags, data_len = struct.unpack(
+            "!IIIHH", data[: TunnelHeader.HEADER_SIZE]
+        )
         return cls(conn_id, seq_num, ack_num, flags, data_len)
 
 
@@ -85,7 +89,6 @@ class ConnectionState:
 class TunnelProtocol:
     """Shared protocol implementation"""
 
-    HEADER_SIZE = 14
     MAX_DATA_SIZE = 1400  # Leave room for IP + ICMP headers
     ICMP_ID = 0x1234  # Fixed ICMP ID for our tunnel
 
@@ -135,14 +138,13 @@ class TunnelProtocol:
 
             raw_data = packet[Raw].load
 
-            if len(raw_data) < TunnelProtocol.HEADER_SIZE:
+            if len(raw_data) < TunnelHeader.HEADER_SIZE:
                 return None
 
             # Extract tunnel header
-            header = TunnelHeader.unpack(raw_data[: TunnelProtocol.HEADER_SIZE])
+            header = TunnelHeader.unpack(raw_data[: TunnelHeader.HEADER_SIZE])
             payload = raw_data[
-                TunnelProtocol.HEADER_SIZE : TunnelProtocol.HEADER_SIZE
-                + header.data_len
+                TunnelHeader.HEADER_SIZE : TunnelHeader.HEADER_SIZE + header.data_len
             ]
 
             return header, payload
