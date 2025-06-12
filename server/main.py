@@ -5,14 +5,15 @@ Receives ICMP packets, extracts TCP data, and forwards to real destinations
 """
 
 import argparse
+import socket
 import subprocess
 import sys
 import threading
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import netfilterqueue as nfq
 from scapy.all import Packet as ScapyPacket
-from scapy.all import Raw, sr
+from scapy.all import Raw
 from scapy.layers.inet import ICMP, IP, TCP
 
 from shared import (
@@ -42,6 +43,10 @@ class TunnelServer:
         self.conn_manager = ConnectionManager()
         self.local_ip = get_local_ip()
         self.icmp_sock = TunnelProtocol.create_raw_socket()
+        self.tcp_sock = socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP
+        )
+        self.NAT: Dict[Tuple[str, int], Tuple[str, int]] = {}
 
         # Client tracking
         self.clients: Dict[str, float] = {}  # client_ip -> last_seen
@@ -104,42 +109,38 @@ class TunnelServer:
                 packet.drop()
                 scapy_packet, tcp = result
                 logger.info(
-                    f"got icmp packet: {scapy_packet.summary()} and the encapsulated packet: {tcp.summary()}"
+                    f"got icmp packet: {scapy_packet.summary()}\nthe encapsulated packet: {tcp.summary()}"
                 )
-                threading.Thread(target=self.forward_tcp_packet, args=result).start()
+                self.forward_tcp_packet(*result)
             else:
                 packet.accept()
         except Exception:
             logger.exception("Error handling ICMP packet")
             packet.drop()
 
-    def forward_tcp_packet(
-        self, full_icmp_packet: ScapyPacket, encapsulated_tcp_packet: ScapyPacket
-    ):
-        client = (encapsulated_tcp_packet[IP].src, encapsulated_tcp_packet[TCP].sport)
-        target = (encapsulated_tcp_packet[IP].dst, encapsulated_tcp_packet[TCP].dport)
-        # deleting source to auto generate server ip and port so the response will get here and not the client
-        del encapsulated_tcp_packet[IP].src
-        del encapsulated_tcp_packet[TCP].sport
-        response, unanswered = sr(encapsulated_tcp_packet, verbose=False)
-        if len(unanswered) > 0:
-            logger.warning(f"target {target[0]}:{target[1]} did not answer tcp request")
-            return
-        logger.debug(
-            f"forwarding response from target {target[0]}:{target[1]} to client {client[0]} as icmp"
-        )
-        for query_answer in response:
+    def handle_tcp_sock_response(self):
+        while True:
+            response_bytes, target = self.tcp_sock.recvfrom(65535)
+            client = self.NAT.get(target)
+            if not client:
+                logger.warning(f"got response from an address not in NAT: {target}")
+                continue
+
+            logger.debug(
+                f"forwarding response from target {target[0]}:{target[1]} to client {client[0]} as icmp"
+            )
+
+            response = IP(response_bytes)
             # NAT - change target to be client
-            pkt = query_answer.answer
-            logger.debug(f"response was {pkt.summary()}")
-            pkt[IP].dst = client[0]
-            pkt[TCP].dport = client[1]
-            logger.debug(f"overridden pkt is now {pkt.summary()}")
+            logger.debug(f"response was {response.summary()}")
+            response[IP].dst = client[0]
+            response[TCP].dport = client[1]
+            logger.debug(f"overridden pkt is now {response.summary()}")
 
             to_send = (
                 IP(dst=client[0])
                 / ICMP(type=ICMP_ECHO_REPLY, id=TunnelProtocol.ICMP_ID)
-                / Raw(pkt.build())
+                / Raw(response.build())
             )
             logger.debug(f"sending response encapsulated as icmp {to_send.summary()}")
             if (
@@ -150,6 +151,28 @@ class TunnelServer:
                 <= 0
             ):
                 logger.warning("did not send bytes...")
+
+    def forward_tcp_packet(
+        self, full_icmp_packet: ScapyPacket, encapsulated_tcp_packet: ScapyPacket
+    ):
+        client: Tuple[str, int] = (
+            encapsulated_tcp_packet[IP].src,
+            encapsulated_tcp_packet[TCP].sport,
+        )
+        target: Tuple[str, int] = (
+            encapsulated_tcp_packet[IP].dst,
+            encapsulated_tcp_packet[TCP].dport,
+        )
+        # deleting source to auto generate server ip and port so the response will get here and not the client
+        del encapsulated_tcp_packet[IP].src
+        del encapsulated_tcp_packet[TCP].sport
+        logger.debug(
+            f"sending tcp packet to target {target[0]}:{target[1]}\npkt:{encapsulated_tcp_packet.show2(dump=True)}"
+        )
+        # add to NAT
+        self.NAT[target] = client
+        if self.tcp_sock.sendto(encapsulated_tcp_packet.build(), target) <= 0:
+            logger.warning("did not send bytes...")
 
     def start(self):
         """Start the tunnel server"""
@@ -164,6 +187,8 @@ class TunnelServer:
             logger.info("Waiting for ICMP tunnel connections...")
 
             self.setup_iptables_rules()
+
+            threading.Thread(target=self.handle_tcp_sock_response, daemon=True).start()
 
             # Setup netfilter queue
             self.nfqueue = nfq.NetfilterQueue()
