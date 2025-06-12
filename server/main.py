@@ -90,7 +90,7 @@ class TunnelServer:
             and scapy_packet[ICMP].id == TunnelProtocol.ICMP_ID
             and scapy_packet[ICMP].type == ICMP_ECHO_REQUEST
         ):
-            tcp = IP(scapy_packet[ICMP].payload)
+            tcp = IP(scapy_packet[Raw].load)
             if tcp.haslayer(TCP):
                 return (scapy_packet, tcp)
         return None
