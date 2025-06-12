@@ -11,20 +11,17 @@ import sys
 import threading
 
 from netfilterqueue import NetfilterQueue, Packet
-from scapy.all import Raw, send
+from scapy.all import Raw
 from scapy.layers.inet import ICMP, IP, TCP
 
 from shared import (
+    ICMP_ECHO_REQUEST,
     ConnectionManager,
-    ConnectionState,
-    TunnelFlags,
-    TunnelHeader,
     TunnelProtocol,
     get_local_ip,
     is_root,
     logger,
     setup_logging,
-    start_icmp_listener,
 )
 
 
@@ -42,6 +39,7 @@ class TunnelClient:
         self.local_ip = get_local_ip()
 
         # Sockets
+        self.icmp_sock = TunnelProtocol.create_raw_socket()
         self.nfqueue = None
 
         # Threading
@@ -90,151 +88,43 @@ class TunnelClient:
     def process_packet(self, packet: Packet):
         """Process intercepted TCP packet"""
         try:
-            pkt = IP(packet.get_payload())
+            data = packet.get_payload()
+            pkt = IP(data)
 
             if not pkt.haslayer(TCP):
                 packet.accept()
                 return
 
-            tcp = pkt[TCP]
-
-            # Generate connection ID
-            local_addr = (pkt.src, tcp.sport)
-            remote_addr = (pkt.dst, tcp.dport)
-            conn_id = TunnelProtocol.generate_connection_id(local_addr, remote_addr)
-
-            # Get or create connection state
-            conn_state = self.conn_manager.get_connection(conn_id)
-            if not conn_state:
-                conn_state = ConnectionState(local_addr, remote_addr)
-                self.conn_manager.add_connection(conn_id, conn_state)
-
-            conn_state.update_activity()
-
-            # Determine tunnel flags
-            flags = TunnelFlags.DATA
-            if tcp.flags & 0x02:  # SYN
-                flags |= TunnelFlags.SYN
-                conn_state.state = "SYN_SENT"
-            if tcp.flags & 0x10:  # ACK
-                flags |= TunnelFlags.ACK
-            if tcp.flags & 0x01:  # FIN
-                flags |= TunnelFlags.FIN
-                conn_state.state = "FIN_WAIT"
-            if tcp.flags & 0x04:  # RST
-                flags |= TunnelFlags.RST
-                conn_state.state = "CLOSED"
-
-            # Extract payload
-            payload = bytes(tcp.payload) if tcp.payload else b""
-
-            # Update sequence numbers
-            conn_state.local_seq = tcp.seq
-            conn_state.local_ack = tcp.ack
-
-            # Create tunnel header
-            header = TunnelHeader(
-                conn_id=conn_id,
-                seq_num=tcp.seq,
-                ack_num=tcp.ack,
-                flags=flags,
-                data_len=len(payload),
+            to_send = (
+                IP(dst=self.server_ip)
+                / ICMP(type=ICMP_ECHO_REQUEST, id=TunnelProtocol.ICMP_ID)
+                / Raw(data)
             )
-
-            # Create ICMP packet
-            icmp_pkt = TunnelProtocol.create_icmp_packet(
-                self.server_ip, header, payload
+            logger.info(
+                f"got tpc packet, sending it as icmp and letting if get forwarded anyway for now\npkt: {to_send.summary()}"
             )
-
-            # Send over ICMP tunnel
-            try:
-                send(icmp_pkt, verbose=False)
-                logger.debug(
-                    f"Sent packet: conn_id={conn_id}, seq={tcp.seq}, flags={flags}, payload_len={len(payload)}"
+            if (
+                self.icmp_sock.sendto(
+                    to_send.build(),
+                    (self.server_ip, 0),
                 )
-            except Exception as e:
-                logger.error(f"Failed to send ICMP packet: {e}")
-                packet.accept()
-                return
-
-            # Drop the original packet (don't let it go out normally)
-            packet.drop()
-
-            # Clean up closed connections
-            if flags & (TunnelFlags.RST | TunnelFlags.FIN):
-                if conn_state.state in ["CLOSED", "FIN_WAIT"]:
-                    threading.Timer(
-                        5.0, lambda: self.conn_manager.remove_connection(conn_id)
-                    ).start()
+                <= 0
+            ):
+                logger.warning("did not send bytes...")
+            packet.accept()
 
         except Exception as e:
             logger.error(f"Error processing packet: {e}")
             packet.accept()
 
-    def handle_icmp_response(self, pkt: ICMP):
+    def handle_icmp_response(self):
         """Handle ICMP responses from server"""
         try:
-            # Parse tunnel data
-            result = TunnelProtocol.parse_icmp_packet(pkt[IP])
-            if not result:
-                logger.error(f"Failed to parse packet: {pkt}")
-                return pkt
-
-            header, payload = result
-
-            # Get connection state
-            conn_state = self.conn_manager.get_connection(header.conn_id)
-            if not conn_state:
-                logger.warning(f"Received data for unknown connection {header.conn_id}")
-                return pkt
-
-            conn_state.update_activity()
-
-            # Update remote sequence numbers
-            conn_state.remote_seq = header.seq_num
-            conn_state.remote_ack = header.ack_num
-
-            # Create TCP response packet
-            tcp_flags = 0
-            if header.flags & TunnelFlags.SYN:
-                tcp_flags |= 0x02
-            if header.flags & TunnelFlags.ACK:
-                tcp_flags |= 0x10
-            if header.flags & TunnelFlags.FIN:
-                tcp_flags |= 0x01
-            if header.flags & TunnelFlags.RST:
-                tcp_flags |= 0x04
-
-            # Build TCP packet to inject back into network stack
-            tcp_pkt = (
-                IP(src=conn_state.remote_addr[0], dst=conn_state.local_addr[0])
-                / TCP(
-                    sport=conn_state.remote_addr[1],
-                    dport=conn_state.local_addr[1],
-                    flags=tcp_flags,
-                    seq=header.seq_num,
-                    ack=header.ack_num,
-                    window=8192,
-                )
-                / Raw(load=payload)
-            )
-
-            # Send the crafted packet
-            send(tcp_pkt, verbose=False)
-            logger.debug(
-                f"Injected TCP response: conn_id={header.conn_id}, seq={header.seq_num}, payload_len={len(payload)}"
-            )
-
-            # Handle connection state changes
-            if header.flags & TunnelFlags.SYN and header.flags & TunnelFlags.ACK:
-                conn_state.state = "ESTABLISHED"
-            elif header.flags & TunnelFlags.FIN:
-                conn_state.state = "CLOSED"
-                # TODO: Amit check if necessary...
-                self.conn_manager.remove_connection(header.conn_id)
-            elif header.flags & TunnelFlags.RST:
-                conn_state.state = "CLOSED"
-                self.conn_manager.remove_connection(header.conn_id)
+            while True:
+                data = self.icmp_sock.recv(1024 * 4)
+                packet = IP(data)
+                if ICMP in packet:
+                    logger.info(f"got icmp response: {packet.summary()}")
         except Exception as e:
             if self.running:
                 logger.error(f"Error handling ICMP response: {e}")
@@ -257,11 +147,7 @@ class TunnelClient:
 
             # Start ICMP response handler thread
             self.icmp_thread = threading.Thread(
-                target=lambda: start_icmp_listener(
-                    handle_icmp_packet=self.handle_icmp_response,
-                    stop_filter=lambda x: not self.running,
-                ),
-                daemon=True,
+                target=self.handle_icmp_response, daemon=True
             )
             self.icmp_thread.start()
 

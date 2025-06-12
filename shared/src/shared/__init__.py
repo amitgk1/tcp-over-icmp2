@@ -19,6 +19,11 @@ from scapy.layers.inet import ICMP, IP
 logger = logging.getLogger(__name__)
 
 
+ICMP_ECHO_REQUEST = 8
+ICMP_ECHO_REPLY = 0
+ICMP_CODE = 0
+
+
 class TunnelFlags(IntEnum):
     """Flags for tunnel protocol"""
 
@@ -150,16 +155,16 @@ class TunnelProtocol:
             logger.error(f"Error parsing ICMP packet: {e}")
             return None
 
-    # @staticmethod
-    # def create_raw_socket() -> socket.socket:
-    #     """Create raw socket for ICMP"""
-    #     try:
-    #         sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
-    #         sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-    #         return sock
-    #     except PermissionError:
-    #         logger.error("Raw socket creation failed. Run as root!")
-    #         raise
+    @staticmethod
+    def create_raw_socket() -> socket.socket:
+        """Create raw socket for ICMP"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+            return sock
+        except PermissionError:
+            logger.error("Raw socket creation failed. Run as root!")
+            raise
 
     @staticmethod
     def calculate_tcp_checksum(
