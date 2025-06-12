@@ -12,7 +12,7 @@ from typing import Dict, List
 
 import netfilterqueue as nfq
 from scapy.all import Packet as ScapyPacket
-from scapy.all import Raw, send, sr
+from scapy.all import Raw, sr
 from scapy.layers.inet import ICMP, IP, TCP
 
 from shared import (
@@ -41,6 +41,7 @@ class TunnelServer:
         # Connection management
         self.conn_manager = ConnectionManager()
         self.local_ip = get_local_ip()
+        self.icmp_sock = TunnelProtocol.create_raw_socket()
 
         # Client tracking
         self.clients: Dict[str, float] = {}  # client_ip -> last_seen
@@ -120,7 +121,7 @@ class TunnelServer:
         # deleting source to auto generate server ip and port so the response will get here and not the client
         del encapsulated_tcp_packet[IP].src
         del encapsulated_tcp_packet[TCP].sport
-        response, unanswered = sr(encapsulated_tcp_packet)
+        response, unanswered = sr(encapsulated_tcp_packet, verbose=False)
         if len(unanswered) > 0:
             logger.warning(f"target {target[0]}:{target[1]} did not answer tcp request")
             return
@@ -141,7 +142,14 @@ class TunnelServer:
                 / Raw(pkt.build())
             )
             logger.debug(f"sending response encapsulated as icmp {to_send.summary()}")
-            send(to_send)
+            if (
+                self.icmp_sock.sendto(
+                    to_send.build(),
+                    (client[0], 0),
+                )
+                <= 0
+            ):
+                logger.warning("did not send bytes...")
 
     def start(self):
         """Start the tunnel server"""
