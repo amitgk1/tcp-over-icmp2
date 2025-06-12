@@ -116,7 +116,7 @@ class TunnelClient:
             packet.drop()
 
         except Exception as e:
-            logger.error(f"Error handling TCP packet: {e}")
+            logger.exception(f"Error handling TCP packet: {e}")
             packet.drop()
 
     def icmp_listener(self):

@@ -51,7 +51,7 @@ class TunnelHeader:
         # Convert IP to 4 bytes
         ip_bytes = socket.inet_aton(self.dst_ip) if self.dst_ip else b"\x00\x00\x00\x00"
 
-        # Pack: magic(4) + conn_id(4) + seq(4) + ack(4) + flags(4) + data_len(4) + ip(4) + port(2) = 30 bytes
+        # Pack: magic(4) + conn_id(4) + seq(4) + ack(4) + flags(4) + data_len(4) + ip(4) + port(2) = 30 bytes total
         return MAGIC_BYTES + struct.pack(
             "!IIIII4sH",
             self.conn_id,
@@ -69,7 +69,7 @@ class TunnelHeader:
         if not data.startswith(MAGIC_BYTES):
             raise ValueError("Invalid magic bytes")
 
-        if len(data) < 30:  # New header size
+        if len(data) < 30:  # magic(4) + 5*int(4) + ip(4) + port(2) = 30 bytes
             raise ValueError("Header too short")
 
         values = struct.unpack("!IIIII4sH", data[4:30])
@@ -165,7 +165,9 @@ def parse_icmp_packet(packet_data: bytes) -> Tuple[Optional[TunnelHeader], bytes
             return None, b""
 
         icmp_payload = bytes(pkt.payload.payload)
-        if len(icmp_payload) < 30:  # Updated header size
+        if (
+            len(icmp_payload) < 30
+        ):  # Updated header size: magic(4) + 5*int(4) + ip(4) + port(2)
             return None, b""
 
         header = TunnelHeader.unpack(icmp_payload)
