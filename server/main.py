@@ -108,9 +108,9 @@ class TunnelServer:
                 threading.Thread(target=self.forward_tcp_packet, args=result)
             else:
                 packet.accept()
-        except Exception as e:
-            logger.error(f"Error handling ICMP packet: {e}")
-            packet.accept()
+        except Exception:
+            logger.exception("Error handling ICMP packet")
+            packet.drop()
 
     def forward_tcp_packet(
         self, full_icmp_packet: ScapyPacket, encapsulated_tcp_packet: ScapyPacket
