@@ -105,7 +105,7 @@ class TunnelServer:
                 logger.info(
                     f"got icmp packet: {scapy_packet.summary()} and the encapsulated packet: {tcp.summary()}"
                 )
-                threading.Thread(target=self.forward_tcp_packet, args=result)
+                threading.Thread(target=self.forward_tcp_packet, args=result).start()
             else:
                 packet.accept()
         except Exception:
