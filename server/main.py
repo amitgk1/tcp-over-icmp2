@@ -10,10 +10,13 @@ import sys
 import threading
 from typing import Dict, List
 
-from netfilterqueue import NetfilterQueue, Packet
-from scapy.layers.inet import ICMP, IP
+import netfilterqueue as nfq
+from scapy.all import Packet as ScapyPacket
+from scapy.all import Raw, send, sr
+from scapy.layers.inet import ICMP, IP, TCP
 
 from shared import (
+    ICMP_ECHO_REPLY,
     ICMP_ECHO_REQUEST,
     ConnectionManager,
     TunnelProtocol,
@@ -80,21 +83,65 @@ class TunnelServer:
             except:
                 pass
 
-    def handle_icmp_packet(self, packet: Packet):
+    def parse_nfq_packet(self, pkt: nfq.Packet):
+        scapy_packet = IP(pkt.get_payload())
+        if (
+            scapy_packet.haslayer(ICMP)
+            and scapy_packet[ICMP].id == TunnelProtocol.ICMP_ID
+            and scapy_packet[ICMP].type == ICMP_ECHO_REQUEST
+        ):
+            tcp = IP(scapy_packet[ICMP].payload)
+            if tcp.haslayer(TCP):
+                return (scapy_packet, tcp)
+        return None
+
+    def handle_icmp_packet(self, packet: nfq.Packet):
         """Handle incoming ICMP packet"""
         try:
-            scapy_packet = IP(packet.get_payload())
-            if (
-                scapy_packet.haslayer(ICMP)
-                and scapy_packet[ICMP].id == TunnelProtocol.ICMP_ID
-                and scapy_packet[ICMP].type == ICMP_ECHO_REQUEST
-            ):
+            result = self.parse_nfq_packet(packet)
+            if result:
                 packet.drop()
-                logger.info(f"got icmp packet: {scapy_packet.summary()}")
+                scapy_packet, tcp = result
+                logger.info(
+                    f"got icmp packet: {scapy_packet.summary()} and the encapsulated packet: {tcp.summary()}"
+                )
+                threading.Thread(target=self.forward_tcp_packet, args=result)
             else:
                 packet.accept()
         except Exception as e:
             logger.error(f"Error handling ICMP packet: {e}")
+            packet.accept()
+
+    def forward_tcp_packet(
+        self, full_icmp_packet: ScapyPacket, encapsulated_tcp_packet: ScapyPacket
+    ):
+        client = (encapsulated_tcp_packet[IP].src, encapsulated_tcp_packet[TCP].sport)
+        target = (encapsulated_tcp_packet[IP].dst, encapsulated_tcp_packet[TCP].dport)
+        # deleting source to auto generate server ip and port so the response will get here and not the client
+        del encapsulated_tcp_packet[IP].src
+        del encapsulated_tcp_packet[TCP].sport
+        response, unanswered = sr(encapsulated_tcp_packet)
+        if len(unanswered) > 0:
+            logger.warning(f"target {target[0]}:{target[1]} did not answer tcp request")
+            return
+        logger.debug(
+            f"forwarding response from target {target[0]}:{target[1]} to client {client[0]} as icmp"
+        )
+        for query_answer in response:
+            # NAT - change target to be client
+            pkt = query_answer.answer
+            logger.debug(f"response was {pkt.summary()}")
+            pkt[IP].dst = client[0]
+            pkt[TCP].dport = client[1]
+            logger.debug(f"overridden pkt is now {pkt.summary()}")
+
+            to_send = (
+                IP(dst=client[0])
+                / ICMP(type=ICMP_ECHO_REPLY, id=TunnelProtocol.ICMP_ID)
+                / Raw(pkt.build())
+            )
+            logger.debug(f"sending response encapsulated as icmp {to_send.summary()}")
+            send(to_send)
 
     def start(self):
         """Start the tunnel server"""
@@ -111,7 +158,7 @@ class TunnelServer:
             self.setup_iptables_rules()
 
             # Setup netfilter queue
-            self.nfqueue = NetfilterQueue()
+            self.nfqueue = nfq.NetfilterQueue()
             self.nfqueue.bind(self.queue_num, self.handle_icmp_packet)
             self.nfqueue.run()
 
