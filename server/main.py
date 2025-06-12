@@ -5,29 +5,34 @@ Receives ICMP packets, extracts TCP data, and forwards to real destinations
 """
 
 import argparse
-import signal
+import subprocess
 import sys
 import threading
 from typing import Dict, List
 
-from scapy.layers.inet import ICMP
+from netfilterqueue import NetfilterQueue, Packet
+from scapy.layers.inet import ICMP, IP
 
 from shared import (
+    ICMP_ECHO_REQUEST,
     ConnectionManager,
+    TunnelProtocol,
     get_local_ip,
     is_root,
     logger,
     setup_logging,
-    start_icmp_listener,
 )
 
 
 class TunnelServer:
     """TCP-over-ICMP Tunnel Server"""
 
-    def __init__(self, bind_ip: str = "0.0.0.0", debug: bool = False):
+    def __init__(
+        self, bind_ip: str = "0.0.0.0", debug: bool = False, queue_num: int = 1
+    ):
         self.bind_ip = bind_ip
         self.debug = debug
+        self.queue_num = queue_num
         self.running = False
 
         # Connection management
@@ -44,10 +49,50 @@ class TunnelServer:
         # Setup logging
         setup_logging(debug)
 
-    def handle_icmp_packet(self, packet: ICMP):
+    def setup_iptables_rules(self):
+        """Setup iptables rules to intercept ICMP packets"""
+        rules = [
+            f"iptables -t raw -A PREROUTING -p icmp -j NFQUEUE --queue-num {self.queue_num}",
+        ]
+
+        logger.info("Setting up iptables rules...")
+        for rule in rules:
+            try:
+                result = subprocess.run(rule.split(), capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.warning(f"Failed to add rule: {rule}")
+                    logger.warning(f"Error: {result.stderr}")
+                else:
+                    logger.debug(f"Added rule: {rule}")
+            except Exception as e:
+                logger.error(f"Error adding iptables rule: {e}")
+
+    def cleanup_iptables_rules(self):
+        """Remove iptables rules"""
+        rules = [
+            f"iptables -t raw -D PREROUTING -p icmp -j NFQUEUE --queue-num {self.queue_num}",
+        ]
+
+        logger.info("Cleaning up iptables rules...")
+        for rule in rules:
+            try:
+                subprocess.run(rule.split(), capture_output=True)
+            except:
+                pass
+
+    def handle_icmp_packet(self, packet: Packet):
         """Handle incoming ICMP packet"""
         try:
-            logger.info(f"got icmp packet: {packet.summary()}")
+            scapy_packet = IP(packet.get_payload())
+            if (
+                scapy_packet.haslayer(ICMP)
+                and scapy_packet[ICMP].id == TunnelProtocol.ICMP_ID
+                and scapy_packet[ICMP].type == ICMP_ECHO_REQUEST
+            ):
+                packet.drop()
+                logger.info(f"got icmp packet: {scapy_packet.summary()}")
+            else:
+                packet.accept()
         except Exception as e:
             logger.error(f"Error handling ICMP packet: {e}")
 
@@ -63,11 +108,12 @@ class TunnelServer:
             logger.info(f"Starting tunnel server on {self.bind_ip}")
             logger.info("Waiting for ICMP tunnel connections...")
 
-            # Start ICMP listener (blocking)
-            start_icmp_listener(
-                handle_icmp_packet=self.handle_icmp_packet,
-                stop_filter=lambda x: not self.running,
-            )
+            self.setup_iptables_rules()
+
+            # Setup netfilter queue
+            self.nfqueue = NetfilterQueue()
+            self.nfqueue.bind(self.queue_num, self.handle_icmp_packet)
+            self.nfqueue.run()
 
         except KeyboardInterrupt:
             logger.info("Received interrupt signal")
@@ -83,6 +129,9 @@ class TunnelServer:
         logger.info("Stopping tunnel server...")
 
         self.running = False
+
+        # Cleanup iptables rules
+        self.cleanup_iptables_rules()
 
         # Close all connections
         for conn_id in list(self.conn_manager.connections.keys()):
@@ -121,9 +170,9 @@ def main():
 
     args = parser.parse_args()
 
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # # Setup signal handlers
+    # signal.signal(signal.SIGINT, signal_handler)
+    # signal.signal(signal.SIGTERM, signal_handler)
 
     # Create server
     global server

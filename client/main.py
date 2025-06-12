@@ -100,9 +100,7 @@ class TunnelClient:
                 / ICMP(type=ICMP_ECHO_REQUEST, id=TunnelProtocol.ICMP_ID)
                 / Raw(data)
             )
-            logger.info(
-                f"got tpc packet, sending it as icmp and letting if get forwarded anyway for now\npkt: {to_send.summary()}"
-            )
+            logger.debug(f"forwarding encapsulated tcp packet {to_send.summary()}")
             if (
                 self.icmp_sock.sendto(
                     to_send.build(),
