@@ -258,135 +258,49 @@ class LocalTCPConnectionHandler:
                     logging.info(
                         f"Tunnel {self.tunnel_id}: Local application closed connection."
                     )
-                    break  # Connection closed by client application
+                    break
 
-                # Extract TCP flags from the data (this is highly simplified)
-                # In a real scenario, you'd parse the actual TCP packet the application sends
-                # and extract its sequence/ack/flags. For a raw proxy, we just see data.
-                # If we're redirecting, the kernel *handles* the TCP handshake with our proxy.
-                # So the first data we get is likely PSH/ACK.
                 current_flags = FLAG_PSH | FLAG_ACK
-                if not self.client_tcp_seq:  # First data likely from SYN
-                    current_flags |= (
+                # Simplified SYN/ACK handling for the tunnel's virtual TCP flow
+                if self.client_tcp_seq == 0 and not self.initial_syn_ack_received:
+                    current_flags = (
                         FLAG_SYN  # Mark initial data with SYN for server to initiate
                     )
-
-                # --- TCP Sequence Numbering (Client's Outgoing) ---
-                # The local client's socket is managing its own TCP sequence with *our* proxy.
-                # We need to create a *synthetic* TCP packet that *appears* to come from the client
-                # for the remote server.
-                # For this minimal version, we will just pass a raw payload and let the server handle
-                # sequence number incrementing with its target. This will break for complex TCP.
-                # A proper solution would require modifying the actual TCP header of the packet
-                # that the local application *would* have sent if not for the redirect.
-                # For simplicity, we just use dummy values and rely on the server to establish
-                # its own flow with the target.
-
-                # Simulate a TCP packet structure that the server will understand
-                # This is a dummy TCP header that only conveys original destination.
-                # Server needs to rebuild this.
-                # Actual data should be based on the local app's stream.
-                # For a full transparent tunnel, you'd parse the actual TCP segments.
-                # Here, we're just forwarding the *payload* of the local connection.
-
-                # Create a placeholder TCP header that contains enough info for the server.
-                # Server will use this to build its own TCP connection.
-                # For this minimal version, we are NOT passing the client's actual TCP header,
-                # just the raw data stream. The server needs to *re-synthesize* TCP segments.
-                # This is where the challenge lies.
-
-                # --- The correct approach for proxying data streams ---
-                # When using `REDIRECT` and acting as a TCP proxy, your client receives
-                # a *stream* of bytes over its accepted socket. It does NOT see raw
-                # TCP packets with their headers and flags.
-                # Therefore, we need to *synthesize* TCP packets for the tunnel server.
-                # This makes the sequence tracking even more critical.
-
-                # For the minimal POC: We'll assume the server infers TCP flags from context (e.g., first packet is SYN)
-                # and manages its own sequence numbers for the remote target.
-                # This *will not* be fully transparent for complex TCP.
-
-                # For our minimal solution, the initial SYN needs to carry the original destination.
-                # Subsequent packets are just data.
-
-                # First, ensure the tunnel connection is established. This will happen on the first data.
-                # If it's the very first data sent on this tunnel ID, mark it as SYN and carry original destination.
-                # We'll use the current flags and a pseudo-TCP header for the server.
-
-                # Create a dummy TCP header to encapsulate for the server, reflecting state
-                # In a real scenario, you'd parse the *incoming* TCP packet from the app
-                # if you were NFQUEUE'ing. Since we're a proxy, we're building a new one.
-
-                # This means we *must* manage sequence/ack numbers ourselves for the 'virtual' TCP flow
-                # between client and server over ICMP.
-
-                # Let's simplify the initial SYN/ACK exchange for the tunnel's virtual TCP.
-                # Client sends SYN-like ICMP
-                # Server sends SYN-ACK-like ICMP
-
-                # This is the client's state for the *tunneled* TCP flow.
-                # Initialize these on the first packet.
-                if self.client_tcp_seq == 0 and not self.initial_syn_ack_received:
-                    # This is the "virtual" SYN being sent over the tunnel.
-                    current_flags = FLAG_SYN
                     self.client_initial_syn_seq = (
                         1000  # Dummy initial seq for our tunnel's TCP
                     )
-                    self.client_tcp_seq = (
-                        self.client_initial_syn_seq + 1
-                    )  # Next seq after SYN
-                    # TCP payload for the tunnel is the data from the app.
-                    # We send a "fake" TCP SYN header to the server for the tunnel handshake.
-                    # The actual application data goes *after* this virtual TCP header.
+                    self.client_tcp_seq = self.client_initial_syn_seq + 1
 
-                    # Synthesize a TCP packet for the server, conveying the original destination.
-                    # This is not a real TCP packet from the client app.
-                    syn_tcp_pkt = TCP(
-                        sport=self.writer.get_extra_info("sockname")[
-                            1
-                        ],  # Client's local port
-                        dport=self.original_dst_port,
-                        flags="S",  # Synthesized SYN for server
-                        seq=self.client_initial_syn_seq,  # Use our dummy initial seq
-                        ack=0,
-                        window=65535,  # Large window
-                    ) / Raw(
-                        load=data
-                    )  # Encapsulate the actual app data as payload for first packet
+                # --- The tunneled TCP packet for the server ---
+                # This needs to carry enough info for the server to establish its connection.
+                # The data is the actual payload from the local application.
+                # The server will re-synthesize its own TCP header.
+                # Here, we just send the raw data.
 
-                    tunneled_tcp_bytes = bytes(syn_tcp_pkt)
+                # IMPORTANT: For minimal, we're not sending a "full" TCP header *from the client*
+                # as part of the tunneled_tcp_bytes. We're just sending the application's
+                # payload data. The server will re-create a TCP header for its outbound connection.
 
-                else:
-                    # Subsequent data packets, assume PSH/ACK
-                    current_flags = FLAG_PSH | FLAG_ACK
+                # For basic HTTP, often the first few bytes are enough to kick off the connection.
+                # If you need to tunnel *raw TCP segments* including their headers, then
+                # `data` should be a `bytes` object that is a full TCP segment you construct,
+                # and you extract its `seq`/`ack`/`flags` to put into TunnelHeader.
 
-                    # Create a dummy TCP header for data. The server will use its own sequence.
-                    # We just need to give it context.
-                    data_tcp_pkt = TCP(
-                        sport=self.writer.get_extra_info("sockname")[1],
-                        dport=self.original_dst_port,
-                        flags="PA",  # PSH/ACK
-                        seq=self.client_tcp_seq,
-                        ack=self.client_tcp_ack,  # Use the ACK we got from server's SYN-ACK
-                        window=65535,
-                    ) / Raw(load=data)
-
-                    tunneled_tcp_bytes = bytes(data_tcp_pkt)
-                    self.client_tcp_seq += len(
-                        data
-                    )  # Update our virtual sequence for next outgoing data
+                # For current "minimal" design, `tunneled_tcp_bytes` is the application's raw data.
+                tunneled_tcp_bytes = data
 
                 tunnel_header = TunnelHeader(
                     flags=current_flags,
                     tunnel_id=self.tunnel_id,
-                    seq_offset=self.client_tcp_seq,  # Pass our current seq for server's reference
-                    ack_offset=self.client_tcp_ack,  # Pass our current ack
+                    original_dst_ip=self.original_dst_ip,  # NEW
+                    original_dst_port=self.original_dst_port,  # NEW
+                    seq_offset=self.client_tcp_seq,
+                    ack_offset=self.client_tcp_ack,
                     tcp_len=len(tunneled_tcp_bytes),
                 )
 
                 icmp_payload = tunnel_header.pack() + tunneled_tcp_bytes
 
-                # Construct ICMP Echo Request
                 icmp_packet = (
                     IP(dst=self.server_ip)
                     / ICMP(
@@ -401,7 +315,7 @@ class LocalTCPConnectionHandler:
                 logging.debug(
                     f"Tunnel {self.tunnel_id}: Sending {len(data)} bytes to server via ICMP."
                 )
-                send(icmp_packet, verbose=0)  # Send directly to server
+                send(icmp_packet, verbose=0)
 
         except Exception as e:
             logging.error(

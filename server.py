@@ -7,7 +7,7 @@ from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NetfilterQueuePacket
 from scapy.all import Packet as ScapyPacket
 from scapy.all import Raw, send
-from scapy.layers.inet import ICMP, IP, TCP
+from scapy.layers.inet import ICMP, IP
 
 from common import (
     FLAG_ACK,
@@ -111,41 +111,40 @@ class ServerTunnel:
     async def handle_tunneled_icmp_request(self, packet: ScapyPacket):
         """Processes an incoming ICMP Echo Request containing tunneled TCP data."""
         client_ip = packet.src
-        raw_tunnel_data = packet[Raw].load  # Raw payload should be available here
+        raw_tunnel_data = packet[Raw].load
         tunnel_header = TunnelHeader.unpack(raw_tunnel_data)
         tunneled_tcp_data = raw_tunnel_data[TUNNEL_HEADER_LEN:]
 
         tunnel_id = tunnel_header.tunnel_id
         flags = tunnel_header.flags
+        # Extract new fields from header
         client_seq_offset = tunnel_header.seq_offset
         client_ack_offset = tunnel_header.ack_offset
         original_tcp_len = tunnel_header.tcp_len
+
+        # Convert IP int back to string
+        target_ip = tunnel_header.original_dst_ip
+        target_port = tunnel_header.original_dst_port
 
         logging.debug(
             f"Tunnel {tunnel_id} from {client_ip}: Received flags={flags}, tcp_len={original_tcp_len}"
         )
 
         if tunnel_id not in self.tunnel_id_to_handler:
-            try:
-                tunneled_tcp_pkt = TCP(tunneled_tcp_data)
-                target_ip = tunneled_tcp_pkt.dst
-                target_port = tunneled_tcp_pkt.dport
-                logging.info(
-                    f"Tunnel {tunnel_id}: New connection request from {client_ip} to {target_ip}:{target_port}"
-                )
+            # New tunnel connection (likely first SYN)
+            logging.info(
+                f"Tunnel {tunnel_id}: New connection request from {client_ip} to {target_ip}:{target_port}"
+            )
 
-                handler = RemoteTCPConnectionHandler(
-                    client_ip, target_ip, target_port, tunnel_id, self.loop, self
-                )
-                self.tunnel_id_to_handler[tunnel_id] = handler
+            handler = RemoteTCPConnectionHandler(
+                client_ip, target_ip, target_port, tunnel_id, self.loop, self
+            )
+            self.tunnel_id_to_handler[tunnel_id] = handler
 
-                await handler.start_remote_connection(tunneled_tcp_data)
-            except Exception as e:
-                logging.error(
-                    f"Tunnel {tunnel_id}: Failed to parse initial TCP for new connection: {e}",
-                    exc_info=True,
-                )
-                return
+            # Start connection to remote target and pass the first data/SYN
+            await handler.start_remote_connection(
+                tunneled_tcp_data
+            )  # This `tunneled_tcp_data` is the raw app data
         else:
             handler = self.tunnel_id_to_handler[tunnel_id]
 
@@ -158,6 +157,7 @@ class ServerTunnel:
                 logging.debug(
                     f"Tunnel {tunnel_id}: Data received, forwarding to remote."
                 )
+                # Send raw app data
                 await handler.send_to_remote_target(tunneled_tcp_data)
             elif flags & FLAG_FIN:
                 logging.info(
@@ -218,10 +218,10 @@ class RemoteTCPConnectionHandler:
         self.client_original_syn_seq = 0
         self.target_initial_syn_seq = 0
 
-    async def start_remote_connection(self, initial_tcp_segment):
+    async def start_remote_connection(self, initial_app_data):  # Renamed for clarity
         try:
-            initial_tunneled_tcp = TCP(initial_tcp_segment)
-            self.client_original_syn_seq = initial_tunneled_tcp.seq
+            # No need to parse TCP(initial_app_data) here if it's just raw app data
+            # self.client_original_syn_seq = initial_tunneled_tcp.seq # This line might not be needed if not full TCP state
 
             self.remote_reader, self.remote_writer = await asyncio.open_connection(
                 self.target_ip, self.target_port
@@ -231,8 +231,8 @@ class RemoteTCPConnectionHandler:
                 f"Tunnel {self.tunnel_id}: Connected to remote target {self.target_ip}:{self.target_port}"
             )
 
-            if initial_tunneled_tcp.payload:
-                await self.send_to_remote_target(initial_tunneled_tcp.payload)
+            if initial_app_data:  # If client sent data with SYN
+                await self.send_to_remote_target(initial_app_data)  # Send raw app data
 
             self.loop.create_task(self._read_from_remote_target())
 
@@ -244,6 +244,7 @@ class RemoteTCPConnectionHandler:
             await self.close()
 
     async def _read_from_remote_target(self):
+        """Reads data from the remote TCP target and encapsulates for client."""
         try:
             while not self.closed and self.remote_reader:
                 data = await self.remote_reader.read(4096)
@@ -253,20 +254,13 @@ class RemoteTCPConnectionHandler:
                     )
                     break
 
-                response_tcp_pkt = TCP(
-                    sport=self.target_port,
-                    dport=0,  # Dummy for now
-                    flags="PA",
-                    seq=1,  # Dummy for now
-                    ack=1,  # Dummy for now
-                    window=65535,
-                ) / Raw(load=data)
-
-                tunneled_tcp_bytes = bytes(response_tcp_pkt)
+                tunneled_tcp_bytes = data
 
                 tunnel_header = TunnelHeader(
                     flags=FLAG_PSH | FLAG_ACK,
                     tunnel_id=self.tunnel_id,
+                    original_dst_ip=self.target_ip,
+                    original_dst_port=self.target_port,
                     seq_offset=1,  # Dummy for now
                     ack_offset=1,  # Dummy for now
                     tcp_len=len(tunneled_tcp_bytes),
@@ -298,15 +292,14 @@ class RemoteTCPConnectionHandler:
         finally:
             await self.close()
 
-    async def send_to_remote_target(self, data):
+    async def send_to_remote_target(self, app_data):  # Renamed for clarity
         if self.remote_writer and not self.closed:
             try:
-                tcp_pkt = TCP(data)
-                payload = tcp_pkt[Raw].load
-                self.remote_writer.write(payload)
+                # NO: tcp_pkt = TCP(data) # 'data' is raw app data, not a TCP segment here
+                self.remote_writer.write(app_data)  # Just write the raw app data
                 await self.remote_writer.drain()
                 logging.debug(
-                    f"Tunnel {self.tunnel_id}: Sent {len(payload)} bytes to remote target."
+                    f"Tunnel {self.tunnel_id}: Sent {len(app_data)} bytes to remote target."
                 )
             except Exception as e:
                 logging.error(
