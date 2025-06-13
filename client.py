@@ -3,7 +3,7 @@ import logging
 import socket
 import threading
 
-from scapy.all import Raw, send, sniff
+from scapy.all import Packet, Raw, send, sniff
 from scapy.layers.inet import ICMP, IP, TCP
 
 from common import (
@@ -42,7 +42,7 @@ class ClientTunnel:
         # No need to explicitly manage raw socket for sending when using scapy.send()
 
         # Queue for incoming ICMP packets to process in the async loop
-        self.icmp_packet_queue = asyncio.Queue()
+        self.icmp_packet_queue = asyncio.Queue[Packet]()
 
         logging.info(f"Client tunnel initializing, listening on {listen_port}")
         logging.info(f"Traffic will be tunneled to server: {server_ip}")
@@ -56,11 +56,10 @@ class ClientTunnel:
     async def _handle_icmp_packet_from_queue(self):
         """Processes ICMP packets received by the sniff thread."""
         while True:
-            raw_pkt_bytes = await self.icmp_packet_queue.get()
+            packet = await self.icmp_packet_queue.get()
             try:
-                packet = IP(raw_pkt_bytes)
                 if packet.haslayer(ICMP) and packet[ICMP].type == ICMP_ECHO_REPLY_TYPE:
-                    if packet.src == self.server_ip and packet.haslayer(Raw):
+                    if packet[IP].src == self.server_ip and packet.haslayer(Raw):
                         self.handle_incoming_tunneled_icmp(packet)
                     else:
                         logging.debug(f"Ignoring non-tunnel ICMP from {packet.src}")
@@ -79,7 +78,7 @@ class ClientTunnel:
         sniff(
             filter=f"icmp and host {self.server_ip} and icmp[icmptype]=={ICMP_ECHO_REPLY_TYPE}",
             prn=lambda pkt: self.loop.call_soon_threadsafe(
-                self.icmp_packet_queue.put_nowait, bytes(pkt)
+                self.icmp_packet_queue.put_nowait, pkt
             ),
             store=0,
         )
