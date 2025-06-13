@@ -48,17 +48,7 @@ def parse_original_dst(sock):
     original_dst_raw = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
 
     # Use network byte order for all multi-byte fields:
-    family_net_byte_order, port_net_byte_order, ip_bytes, _ = struct.unpack(
-        "!HH4s8s", original_dst_raw
-    )
-
-    family = socket.ntohs(family_net_byte_order)
-    original_port = socket.ntohs(port_net_byte_order)
-
-    if family != socket.AF_INET:
-        raise ValueError(
-            f"Unsupported socket family for SO_ORIGINAL_DST: {family}. Expected AF_INET ({socket.AF_INET})"
-        )
+    original_port, ip_bytes = struct.unpack("!2xH4s8x", original_dst_raw)
 
     original_ip = socket.inet_ntoa(ip_bytes)
 
