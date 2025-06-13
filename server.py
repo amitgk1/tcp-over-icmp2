@@ -7,7 +7,7 @@ from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NetfilterQueuePacket
 from scapy.all import Packet as ScapyPacket
 from scapy.all import Raw, send
-from scapy.layers.inet import ICMP, IP
+from scapy.layers.inet import ICMP, IP, fragment
 
 from common import (
     FLAG_ACK,
@@ -268,7 +268,7 @@ class RemoteTCPConnectionHandler:
 
                 icmp_payload = tunnel_header.pack() + tunneled_tcp_bytes
 
-                icmp_packet = (
+                icmp_packet = fragment(
                     IP(dst=self.client_ip)
                     / ICMP(
                         type=ICMP_ECHO_REPLY_TYPE,

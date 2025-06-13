@@ -3,7 +3,7 @@ import logging
 import socket
 import threading
 
-from scapy.all import Packet, Raw, send, sniff
+from scapy.all import IPSession, Packet, Raw, send, sniff
 from scapy.layers.inet import ICMP, IP, TCP
 
 from common import (
@@ -58,17 +58,23 @@ class ClientTunnel:
         while True:
             packet = await self.icmp_packet_queue.get()
             try:
-                if packet.haslayer(ICMP) and packet[ICMP].type == ICMP_ECHO_REPLY_TYPE:
-                    if packet[IP].src == self.server_ip and packet.haslayer(Raw):
-                        self.handle_incoming_tunneled_icmp(packet)
-                    else:
-                        logging.debug(f"Ignoring non-tunnel ICMP from {packet.src}")
-                else:
-                    logging.debug(f"Ignoring non-ICMP or non-reply from {packet.src}")
+                self.handle_incoming_tunneled_icmp(packet)
             except Exception as e:
                 logging.error(f"Error parsing incoming ICMP packet: {e}")
             finally:
                 self.icmp_packet_queue.task_done()
+
+    def _filter_ip_packets(self, pkt: Packet):
+        pkt.show2()
+        if (
+            pkt.haslayer(ICMP)
+            and pkt[ICMP].type == ICMP_ECHO_REPLY_TYPE
+            and pkt[IP].src == self.server_ip
+            and pkt.haslayer(Raw)
+        ):
+            return True
+        logging.debug(f"Ignoring non-ICMP or non-reply from {pkt.src}")
+        return False
 
     def _icmp_sniff_thread(self):
         """Dedicated thread for sniffing ICMP replies, pushing to queue."""
@@ -76,10 +82,12 @@ class ClientTunnel:
         # Filter for ICMP Echo Replies from our server
         # Using lfilter to process packets as they arrive efficiently
         sniff(
-            filter=f"icmp and host {self.server_ip} and icmp[icmptype]=={ICMP_ECHO_REPLY_TYPE}",
+            filter=f"host {self.server_ip}",
+            session=IPSession,
             prn=lambda pkt: self.loop.call_soon_threadsafe(
                 self.icmp_packet_queue.put_nowait, pkt
             ),
+            lfilter=self._filter_ip_packets,
             store=0,
         )
 
