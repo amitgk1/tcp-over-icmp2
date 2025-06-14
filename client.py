@@ -3,7 +3,7 @@ import logging
 import socket
 import threading
 
-from scapy.all import IPSession, Packet, Raw, send, sniff
+from scapy.all import Packet, Raw, send, sniff
 from scapy.layers.inet import ICMP, IP, TCP
 
 from common import (
@@ -18,6 +18,7 @@ from common import (
     TunnelHeader,
     parse_original_dst,
 )
+from custom_ip_frag import FixedIPSession
 
 # --- Configuration ---
 SERVER_IP = "YOUR_SERVER_IP_HERE"  # Replace with your server's public IP
@@ -82,12 +83,10 @@ class ClientTunnel:
         # Filter for ICMP Echo Replies from our server
         # Using lfilter to process packets as they arrive efficiently
         sniff(
-            filter=f"host {self.server_ip}",
-            session=IPSession,
-            prn=lambda pkt: self.loop.call_soon_threadsafe(
-                self.icmp_packet_queue.put_nowait, pkt
-            ),
-            lfilter=self._filter_ip_packets,
+            filter=f"src {self.server_ip}",
+            session=FixedIPSession,
+            prn=lambda pkt: pkt.show(),
+            # lfilter=self._filter_ip_packets,
             store=0,
         )
 
