@@ -171,7 +171,7 @@ class PacketHandler:
             f"Serializing packet - Type: {packet.packet_type.name}, Seq: {packet.sequence}, Conn: {packet.connection_id}"
         )
 
-        # Pack the header
+        # Pack the header (exactly 16 bytes)
         header = struct.pack(
             "!BIIIH",
             packet.packet_type.value,
@@ -181,9 +181,8 @@ class PacketHandler:
             0,
         )  # Checksum placeholder
 
-        # Add connection ID
+        # Add connection ID (separate from header)
         conn_id_bytes = packet.connection_id.encode("utf-8")
-        header += conn_id_bytes
 
         # Add fragment info if needed
         if packet.fragment_id is not None:
@@ -199,8 +198,8 @@ class PacketHandler:
         else:
             fragment_header = struct.pack("!IHH", 0, 0, 0)
 
-        # Combine all parts
-        packet_data = header + fragment_header + packet.data
+        # Combine all parts: header + conn_id + fragment_header + data
+        packet_data = header + conn_id_bytes + fragment_header + packet.data
 
         # Calculate and insert checksum
         checksum = calculate_checksum(packet_data, self.logger)
@@ -216,16 +215,20 @@ class PacketHandler:
         self.logger.debug(f"Parsing packet - Data size: {len(data)}")
 
         try:
-            if len(data) < self.TUNNEL_HEADER_SIZE:
+            if len(data) < self.MIN_PACKET_SIZE:
                 self.logger.debug(
-                    f"Packet too small: {len(data)} < {self.TUNNEL_HEADER_SIZE}"
+                    f"Packet too small: {len(data)} < {self.MIN_PACKET_SIZE}"
                 )
                 return None
 
-            # Parse header
-            header = data[: self.TUNNEL_HEADER_SIZE]
+            # Parse header (exactly 16 bytes)
+            if len(data) < 16:
+                self.logger.debug(f"Packet too small for header: {len(data)} < 16")
+                return None
+
+            header = data[:16]
             packet_type_val, sequence, conn_id_len, reserved, checksum = struct.unpack(
-                "!BIIIH", header[:16]
+                "!BIIIH", header
             )
 
             self.logger.debug(
@@ -242,7 +245,7 @@ class PacketHandler:
                 )
                 return None
 
-            # Parse connection ID
+            # Parse connection ID (comes after header)
             conn_id_start = 16
             conn_id_end = conn_id_start + conn_id_len
             if conn_id_end > len(data):
@@ -254,7 +257,7 @@ class PacketHandler:
             connection_id = data[conn_id_start:conn_id_end].decode("utf-8")
             self.logger.debug(f"Parsed connection ID: {connection_id}")
 
-            # Parse fragment info
+            # Parse fragment info (comes after connection ID)
             fragment_start = conn_id_end
             fragment_end = fragment_start + self.FRAGMENT_HEADER_SIZE
             if fragment_end > len(data):
@@ -271,7 +274,7 @@ class PacketHandler:
                 f"Parsed fragment info - ID: {fragment_id}, Total: {total_fragments}, Offset: {fragment_offset}"
             )
 
-            # Get data
+            # Get data (comes after fragment header)
             packet_data = data[fragment_end:]
             self.logger.debug(f"Extracted data - Size: {len(packet_data)}")
 
