@@ -181,8 +181,13 @@ class PacketHandler:
             0,
         )  # Checksum placeholder
 
+        self.logger.debug(f"Header size: {len(header)} bytes")
+        self.logger.debug(f"Header hex: {header.hex()}")
+
         # Add connection ID (separate from header)
         conn_id_bytes = packet.connection_id.encode("utf-8")
+        self.logger.debug(f"Connection ID bytes size: {len(conn_id_bytes)}")
+        self.logger.debug(f"Connection ID: {packet.connection_id}")
 
         # Add fragment info if needed
         if packet.fragment_id is not None:
@@ -198,8 +203,15 @@ class PacketHandler:
         else:
             fragment_header = struct.pack("!IHH", 0, 0, 0)
 
+        self.logger.debug(f"Fragment header size: {len(fragment_header)} bytes")
+
         # Combine all parts: header + conn_id + fragment_header + data
         packet_data = header + conn_id_bytes + fragment_header + packet.data
+
+        self.logger.debug(f"Packet before checksum - Size: {len(packet_data)}")
+        self.logger.debug(
+            f"Structure: header({len(header)}) + conn_id({len(conn_id_bytes)}) + fragment({len(fragment_header)}) + data({len(packet.data)})"
+        )
 
         # Calculate and insert checksum
         checksum = calculate_checksum(packet_data, self.logger)
@@ -213,6 +225,9 @@ class PacketHandler:
     def parse_packet(self, data: bytes) -> Optional[TunnelPacket]:
         """Parse bytes into a tunnel packet."""
         self.logger.debug(f"Parsing packet - Data size: {len(data)}")
+        self.logger.debug(
+            f"Data hex: {data.hex()[:32]}..."
+        )  # Show first 16 bytes in hex
 
         try:
             if len(data) < self.MIN_PACKET_SIZE:
@@ -227,6 +242,9 @@ class PacketHandler:
                 return None
 
             header = data[:16]
+            self.logger.debug(f"Header size: {len(header)} bytes")
+            self.logger.debug(f"Header hex: {header.hex()}")
+
             packet_type_val, sequence, conn_id_len, reserved, checksum = struct.unpack(
                 "!BIIIH", header
             )
@@ -296,6 +314,8 @@ class PacketHandler:
 
         except (struct.error, UnicodeDecodeError, ValueError) as e:
             self.logger.error(f"Failed to parse packet: {e}")
+            self.logger.error(f"Packet size: {len(data)}")
+            self.logger.error(f"Packet hex: {data.hex()}")
             return None
 
     def handle_fragmented_packet(self, packet: TunnelPacket) -> Optional[bytes]:

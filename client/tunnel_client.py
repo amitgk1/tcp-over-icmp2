@@ -411,7 +411,7 @@ class TunnelClient:
 
             # Sniff for ICMP Echo Reply packets with specific filtering
             # Only capture packets from our server with our ICMP ID
-            filter_str = f"icmp and src {self.server_ip} and icmp[0] == 0 and icmp[4:2] == {self.icmp_id}"
+            filter_str = f"icmp and src {self.server_ip} and icmp[0] == 0"
             self.logger.debug(f"Using ICMP filter: {filter_str}")
 
             sniff(
@@ -462,6 +462,7 @@ class TunnelClient:
             # Parse tunnel packet
             tunnel_data = packet[Raw].load
             self.logger.debug(f"Received ICMP response - Data size: {len(tunnel_data)}")
+            self.logger.debug(f"Tunnel data hex: {tunnel_data.hex()[:32]}...")
 
             # Validate minimum packet size before parsing
             if len(tunnel_data) < self.packet_handler.MIN_PACKET_SIZE:
@@ -495,6 +496,12 @@ class TunnelClient:
 
         except Exception as e:
             self.logger.error(f"Error handling ICMP response: {e}")
+            self.logger.error(
+                f"Packet layers: {[layer.name for layer in packet.layers()]}"
+            )
+            if packet.haslayer(Raw):
+                self.logger.error(f"Raw data size: {len(packet[Raw].load)}")
+                self.logger.error(f"Raw data hex: {packet[Raw].load.hex()}")
             self.stats["errors"] += 1
 
     def _handle_connect_response(self, packet: TunnelPacket):
