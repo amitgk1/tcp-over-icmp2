@@ -51,6 +51,9 @@ class PacketHandler:
     # Maximum data size per packet
     MAX_DATA_SIZE = MAX_ICMP_PAYLOAD - TUNNEL_HEADER_SIZE - FRAGMENT_HEADER_SIZE
 
+    # Minimum packet size for validation
+    MIN_PACKET_SIZE = 16  # Minimum size for basic header parsing
+
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger(__name__)
         self.sequence_counter = 0

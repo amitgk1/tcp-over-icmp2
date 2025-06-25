@@ -409,9 +409,13 @@ class TunnelClient:
         try:
             self.logger.debug(f"Starting ICMP response listener for {self.server_ip}")
 
-            # Sniff for ICMP Echo Reply packets
+            # Sniff for ICMP Echo Reply packets with specific filtering
+            # Only capture packets from our server with our ICMP ID
+            filter_str = f"icmp and src {self.server_ip} and icmp[0] == 0 and icmp[4:2] == {self.icmp_id}"
+            self.logger.debug(f"Using ICMP filter: {filter_str}")
+
             sniff(
-                filter=f"icmp and src {self.server_ip} and icmp[0] == 0",
+                filter=filter_str,
                 prn=self._handle_icmp_response,
                 store=0,
             )
@@ -421,13 +425,50 @@ class TunnelClient:
     def _handle_icmp_response(self, packet):
         """Handle ICMP response from server."""
         try:
+            # Validate packet structure
+            if not packet.haslayer(IP):
+                self.logger.debug("Packet has no IP layer, ignoring")
+                return
+
+            if not packet.haslayer(ICMP):
+                self.logger.debug("Packet has no ICMP layer, ignoring")
+                return
+
             if not packet.haslayer(Raw):
                 self.logger.debug("ICMP packet has no Raw layer, ignoring")
+                return
+
+            # Validate ICMP type (should be Echo Reply = 0)
+            if packet[ICMP].type != 0:
+                self.logger.debug(
+                    f"ICMP packet type {packet[ICMP].type} is not Echo Reply, ignoring"
+                )
+                return
+
+            # Validate ICMP ID matches our tunnel
+            if packet[ICMP].id != self.icmp_id:
+                self.logger.debug(
+                    f"ICMP ID {packet[ICMP].id} doesn't match tunnel ID {self.icmp_id}, ignoring"
+                )
+                return
+
+            # Validate source IP
+            if packet[IP].src != self.server_ip:
+                self.logger.debug(
+                    f"ICMP source {packet[IP].src} doesn't match server {self.server_ip}, ignoring"
+                )
                 return
 
             # Parse tunnel packet
             tunnel_data = packet[Raw].load
             self.logger.debug(f"Received ICMP response - Data size: {len(tunnel_data)}")
+
+            # Validate minimum packet size before parsing
+            if len(tunnel_data) < self.packet_handler.MIN_PACKET_SIZE:
+                self.logger.debug(
+                    f"Tunnel data too small: {len(tunnel_data)} bytes, ignoring"
+                )
+                return
 
             tunnel_packet = self.packet_handler.parse_packet(tunnel_data)
 
