@@ -1,10 +1,10 @@
 [project]
-name = "tcp-over-icmp"
+name = "server"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["scapy", "shared"]
 
-[tool.uv.workspace]
-members = ["client", "server", "shared"]
+[tool.uv.sources]
+shared = { workspace = true }

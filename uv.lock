@@ -1,0 +1,122 @@
+version = 1
+revision = 2
+requires-python = ">=3.12"
+
+[manifest]
+members = [
+    "client",
+    "server",
+    "shared",
+    "tcp-over-icmp",
+]
+
+[[package]]
+name = "client"
+version = "0.1.0"
+source = { virtual = "client" }
+dependencies = [
+    { name = "netfilterqueue" },
+    { name = "psutil" },
+    { name = "pyroute2" },
+    { name = "python-iptables" },
+    { name = "scapy" },
+    { name = "shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "netfilterqueue" },
+    { name = "psutil" },
+    { name = "pyroute2" },
+    { name = "python-iptables" },
+    { name = "scapy" },
+    { name = "shared", editable = "shared" },
+]
+
+[[package]]
+name = "netfilterqueue"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/1e/216bc353a860a7baa580573e6e161343e88c29b80badc778a60b6bcebb74/NetfilterQueue-1.1.0.tar.gz", hash = "sha256:e30eff999325617f54bd95b3d8d3353214cc77b5e3188f90ec3a6f6288888d72", size = 90337, upload-time = "2023-03-01T08:01:40.211Z" }
+
+[[package]]
+name = "psutil"
+version = "7.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/80/336820c1ad9286a4ded7e845b2eccfcb27851ab8ac6abece774a6ff4d3de/psutil-7.0.0.tar.gz", hash = "sha256:7be9c3eba38beccb6495ea33afd982a44074b78f28c434a1f51cc07fd315c456", size = 497003, upload-time = "2025-02-13T21:54:07.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ed/e6/2d26234410f8b8abdbf891c9da62bee396583f713fb9f3325a4760875d22/psutil-7.0.0-cp36-abi3-macosx_10_9_x86_64.whl", hash = "sha256:101d71dc322e3cffd7cea0650b09b3d08b8e7c4109dd6809fe452dfd00e58b25", size = 238051, upload-time = "2025-02-13T21:54:12.36Z" },
+    { url = "https://files.pythonhosted.org/packages/04/8b/30f930733afe425e3cbfc0e1468a30a18942350c1a8816acfade80c005c4/psutil-7.0.0-cp36-abi3-macosx_11_0_arm64.whl", hash = "sha256:39db632f6bb862eeccf56660871433e111b6ea58f2caea825571951d4b6aa3da", size = 239535, upload-time = "2025-02-13T21:54:16.07Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/ed/d362e84620dd22876b55389248e522338ed1bf134a5edd3b8231d7207f6d/psutil-7.0.0-cp36-abi3-manylinux_2_12_i686.manylinux2010_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:1fcee592b4c6f146991ca55919ea3d1f8926497a713ed7faaf8225e174581e91", size = 275004, upload-time = "2025-02-13T21:54:18.662Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/b9/b0eb3f3cbcb734d930fdf839431606844a825b23eaf9a6ab371edac8162c/psutil-7.0.0-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4b1388a4f6875d7e2aff5c4ca1cc16c545ed41dd8bb596cefea80111db353a34", size = 277986, upload-time = "2025-02-13T21:54:21.811Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/a2/709e0fe2f093556c17fbafda93ac032257242cabcc7ff3369e2cb76a97aa/psutil-7.0.0-cp36-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a5f098451abc2828f7dc6b58d44b532b22f2088f4999a937557b603ce72b1993", size = 279544, upload-time = "2025-02-13T21:54:24.68Z" },
+    { url = "https://files.pythonhosted.org/packages/50/e6/eecf58810b9d12e6427369784efe814a1eec0f492084ce8eb8f4d89d6d61/psutil-7.0.0-cp37-abi3-win32.whl", hash = "sha256:ba3fcef7523064a6c9da440fc4d6bd07da93ac726b5733c29027d7dc95b39d99", size = 241053, upload-time = "2025-02-13T21:54:34.31Z" },
+    { url = "https://files.pythonhosted.org/packages/50/1b/6921afe68c74868b4c9fa424dad3be35b095e16687989ebbb50ce4fceb7c/psutil-7.0.0-cp37-abi3-win_amd64.whl", hash = "sha256:4cf3d4eb1aa9b348dec30105c55cd9b7d4629285735a102beb4441e38db90553", size = 244885, upload-time = "2025-02-13T21:54:37.486Z" },
+]
+
+[[package]]
+name = "pyroute2"
+version = "0.9.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "win-inet-pton", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/50/a53f35b42a7d14a8f317dbba219a21938163c58ae3d785667abfe8b2f416/pyroute2-0.9.2.tar.gz", hash = "sha256:aea3c0e1b46f48295edb29caaba3ceb6415bdcb975cba3f1489ffcc3198e0ce3", size = 470901, upload-time = "2025-04-28T17:00:26.678Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/08/9c/8456183fb15a97d514c962b8934d8f0f8b03940e2ed7ec943d1fd2ae26ad/pyroute2-0.9.2-py3-none-any.whl", hash = "sha256:70e3def534fbd8f232927c88415ce0bf5201c208304ad189322d2db5c331fe77", size = 474394, upload-time = "2025-04-28T17:00:22.55Z" },
+]
+
+[[package]]
+name = "python-iptables"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/3c/a2626b88fffb5bcebae80a2dca1e09ff539ab454a8e5fb2e50141943a1f8/python_iptables-1.2.0.tar.gz", hash = "sha256:60f120d548f6d940f682f2c78851956018588936de05b9d5d338c3cb9bb47ca2", size = 60114, upload-time = "2025-04-06T22:14:56.321Z" }
+
+[[package]]
+name = "scapy"
+version = "2.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/df/2f/035d3888f26d999e9680af8c7ddb7ce4ea0fd8d0e01c000de634c22dcf13/scapy-2.6.1.tar.gz", hash = "sha256:7600d7e2383c853e5c3a6e05d37e17643beebf2b3e10d7914dffcc3bc3c6e6c5", size = 2247754, upload-time = "2024-11-05T08:43:23.488Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/34/8695b43af99d0c796e4b7933a0d7df8925f43a8abdd0ff0f6297beb4de3a/scapy-2.6.1-py3-none-any.whl", hash = "sha256:88a998572049b511a1f3e44f4aa7c62dd39c6ea2aa1bb58434f503956641789d", size = 2420670, upload-time = "2024-11-05T08:43:21.285Z" },
+]
+
+[[package]]
+name = "server"
+version = "0.1.0"
+source = { virtual = "server" }
+dependencies = [
+    { name = "scapy" },
+    { name = "shared" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "scapy" },
+    { name = "shared", editable = "shared" },
+]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
+source = { editable = "shared" }
+dependencies = [
+    { name = "scapy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "scapy" }]
+
+[[package]]
+name = "tcp-over-icmp"
+version = "0.1.0"
+source = { virtual = "." }
+
+[[package]]
+name = "win-inet-pton"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/da/0b1487b5835497dea00b00d87c2aca168bb9ca2e2096981690239e23760a/win_inet_pton-1.1.0.tar.gz", hash = "sha256:dd03d942c0d3e2b1cf8bab511844546dfa5f74cb61b241699fa379ad707dea4f", size = 2949, upload-time = "2019-02-19T17:46:23.925Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/31/ff772a44aa56319df8afbb0b34f1a856f66f05b9d5f1fed917849e47fdae/win_inet_pton-1.1.0-py2.py3-none-any.whl", hash = "sha256:eaf0193cbe7152ac313598a0da7313fb479f769343c0c16c5308f64887dc885b", size = 4848, upload-time = "2019-02-19T17:46:22.182Z" },
+]
