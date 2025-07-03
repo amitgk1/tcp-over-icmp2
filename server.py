@@ -2,6 +2,7 @@
 import argparse
 import logging
 import os
+import queue
 import socket
 import sys
 import threading
@@ -121,7 +122,8 @@ class TunnelServer:
                             data=b"",
                         )
                         self.tunnel.send_packet(ack_packet, client_ip)
-
+                except queue.Empty:
+                    continue
                 except Exception:
                     if self.running:
                         logging.exception("Tunnel to target error")
