@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import os
 import socket
 import sys
@@ -121,9 +122,9 @@ class TunnelServer:
                         )
                         self.tunnel.send_packet(ack_packet, client_ip)
 
-                except Exception as e:
+                except Exception:
                     if self.running:
-                        print(f"Tunnel to target error: {e}")
+                        logging.exception("Tunnel to target error")
                     break
 
         def target_to_tunnel():
