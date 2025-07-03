@@ -28,7 +28,7 @@ class TunnelPacket:
     def pack(self) -> bytes:
         """Pack the tunnel packet into bytes"""
         header = struct.pack(
-            "!IIHHIHHI",
+            "!IIHH4sH4sH",
             self.seq,
             self.ack,
             self.flags,
@@ -46,11 +46,11 @@ class TunnelPacket:
         if len(data) < 24:  # Minimum header size
             raise ValueError("Packet too small")
 
-        header = struct.unpack("!IIHHIHHI", data[:24])
+        header = struct.unpack("!IIHH4sH4sH", data[:24])
         seq, ack, flags, window, src_ip_int, src_port, dst_ip_int, dst_port = header
 
-        src_ip = socket.inet_ntoa(struct.pack("!I", src_ip_int))
-        dst_ip = socket.inet_ntoa(struct.pack("!I", dst_ip_int))
+        src_ip = socket.inet_ntoa(src_ip_int)
+        dst_ip = socket.inet_ntoa(dst_ip_int)
         payload = data[24:]
 
         return cls(seq, ack, flags, window, src_ip, src_port, dst_ip, dst_port, payload)
