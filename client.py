@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import ipaddress
+import logging
 from typing import cast
 
 from netfilterqueue import NetfilterQueue
@@ -14,21 +15,23 @@ SERVER_IP = "192.168.1.61"
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_out = 0
 
-# build a small whitelist of dest‐nets we do NOT want to tunnel:
-WHITELIST = [
+logging.getLogger(__name__).setLevel(logging.DEBUG)
+
+# build a small BLACKLIST of dest‐nets we do NOT want to tunnel:
+BLACKLIST = [
     ipaddress.ip_network("127.0.0.0/8"),  # lo
-    ipaddress.ip_network("10.0.0.0/8"),  # private
-    ipaddress.ip_network("192.168.0.0/16"),  # private
-    ipaddress.ip_network(SERVER_IP + "/32"),  # the tunnel server itself
+    # ipaddress.ip_network("10.0.0.0/8"),  # private
+    # ipaddress.ip_network("192.168.0.0/16"),  # private
+    # ipaddress.ip_network(SERVER_IP + "/32"),  # the tunnel server itself
 ]
 
 
 def should_wrap_tcp(ip_pkt: IP) -> bool:
-    # Only IPv4 TCP, dest not in WHITELIST
+    # Only IPv4 TCP, dest not in BLACKLIST
     if ip_pkt.proto != 6:
         return False
     dst = ipaddress.IPv4Address(ip_pkt.dst)
-    return not any(dst in net for net in WHITELIST)
+    return not any(dst in net for net in BLACKLIST)
 
 
 def client_cb(nf_pkt: NFQPacket):
@@ -38,19 +41,21 @@ def client_cb(nf_pkt: NFQPacket):
 
     # 1) Outgoing TCP → wrap in ICMP echo‐request
     if should_wrap_tcp(ip):
+        logging.debug(f"outgoing tcp packet {ip.summary()}")
         inner = raw
         icmp = (
             IP(dst=SERVER_IP)
             / ICMP(type=8, code=0, id=ICMP_ID, seq=seq_out)
             / Raw(inner)
         )
-        send(icmp, verbose=False)
+        send(icmp, verbose=True)
         seq_out = (seq_out + 1) & 0xFFFF
         nf_pkt.drop()
         return
 
     # 2) Incoming ICMP echo‐reply → unwrap & inject
     if ip.proto == 1 and ip[ICMP].type == 0 and ip[ICMP].id == ICMP_ID:
+        logging.debug("incoming icmp reply with tunnel code")
         inner = bytes(ip[ICMP].payload)
         nf_pkt.set_payload(inner)
         nf_pkt.accept()
