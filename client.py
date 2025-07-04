@@ -5,11 +5,12 @@ from typing import cast
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, send
+from scapy.all import Raw, conf, get_if_addr, send
 from scapy.layers.inet import ICMP, IP
 
 # your server’s public IP (the decap box)
 SERVER_IP = "192.168.1.61"
+CLIENT_PRIVATE = get_if_addr(conf.iface)
 
 # ID for our echo messages
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
@@ -24,6 +25,23 @@ BLACKLIST = [
     # ipaddress.ip_network("192.168.0.0/16"),  # private
     # ipaddress.ip_network(SERVER_IP + "/32"),  # the tunnel server itself
 ]
+
+
+def normalize_for_local(inner_bytes: bytes):
+    p = IP(inner_bytes)
+    # rewrite the dst to your private client IP
+    p.dst = CLIENT_PRIVATE
+    # delete old length/checksums so Scapy recalcs them
+    del p.len, p.chksum
+    if p.haslayer(Raw):  # strip Raw so checksums get recomputed
+        pass
+    if p.haslayer(IP):
+        # ensure TCP checksum is also cleared
+        if p.haslayer("TCP"):
+            del p["TCP"].chksum
+    # you can also reset ttl if you like
+    p.ttl = max(p.ttl, 64)
+    return bytes(p)
 
 
 def should_wrap_tcp(ip_pkt: IP) -> bool:
@@ -57,7 +75,8 @@ def client_cb(nf_pkt: NFQPacket):
     if ip.proto == 1 and ip[ICMP].type == 0 and ip[ICMP].id == ICMP_ID:
         logging.debug("incoming icmp reply with tunnel code")
         inner = bytes(ip[ICMP].payload)
-        nf_pkt.set_payload(inner)
+        fixed = normalize_for_local(inner)
+        nf_pkt.set_payload(fixed)
         nf_pkt.accept()
         return
 
