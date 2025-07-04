@@ -15,7 +15,7 @@ SERVER_IP = "192.168.1.61"
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_out = 0
 
-logging.getLogger(__name__).setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.DEBUG)
 
 # build a small BLACKLIST of dest‐nets we do NOT want to tunnel:
 BLACKLIST = [

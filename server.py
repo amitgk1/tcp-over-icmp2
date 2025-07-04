@@ -15,7 +15,7 @@ CLIENT_INNER_NET = ipaddress.ip_network("198.168.244.0/24")
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_reply = 0
 
-logging.getLogger(__name__).setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.DEBUG)
 
 
 def server_cb(nf_pkt: NFQPacket):
@@ -27,11 +27,9 @@ def server_cb(nf_pkt: NFQPacket):
     if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
         logging.debug("got icmp packet from tunnel")
         inner = bytes(ip[ICMP].payload)
-        # inject into kernel → routing/NAT → real target
-        tcp_packet = IP(inner)
-        tcp_packet.show()
-        send(tcp_packet, verbose=True)
-        nf_pkt.drop()
+        # re‐inject into kernel so NAT + FORWARD apply:
+        nf_pkt.set_payload(inner)
+        nf_pkt.accept()
         return
 
     logging.debug(f"incoming ip packet {ip.summary()}")
