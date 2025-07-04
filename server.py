@@ -3,7 +3,7 @@ import logging
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send
+from scapy.all import Raw, conf, get_if_addr, send, wrpcap
 from scapy.layers.inet import ICMP, IP, TCP
 
 SERVER_IP = get_if_addr(conf.iface)
@@ -29,11 +29,11 @@ def normalize_and_nat(inner_bytes):
         if not any(o[0] == "MSS" for o in opts):
             p[TCP].options = [("MSS", 1460)] + opts
     # 4) let Scapy rebuild the bytes (with correct checksums)
+    wrpcap("after_normalize.pcap", p)
     return bytes(p)
 
 
 def server_cb(nf_pkt: NFQPacket):
-    global _dumped
     global seq_reply
     raw = nf_pkt.get_payload()
     ip = IP(raw)
