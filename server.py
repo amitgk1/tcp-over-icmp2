@@ -3,7 +3,7 @@ import logging
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send, wrpcap
+from scapy.all import Raw, conf, get_if_addr, send
 from scapy.layers.inet import ICMP, IP, TCP
 
 SERVER_IP = get_if_addr(conf.iface)
@@ -15,32 +15,21 @@ seq_reply = 0
 logging.getLogger().setLevel(logging.DEBUG)
 
 
-def normalize_inner(inner_bytes: bytes):
-    """
-    Parse inner IP packet, zero out checksums, let Scapy recalc them,
-    reset TTL to a sane value, then return the new raw bytes.
-    """
+def normalize_and_nat(inner_bytes):
     p = IP(inner_bytes)
-    # fix TTL (too low and some hosts drop)
+    # 1) rewrite to server’s public IP (and preserve the client’s port)
+    p.src = SERVER_IP
+    # 2) clear all old lengths & checksums so Scapy will recalc
+    del p.len, p.chksum
+    del p[TCP].chksum
+    # 3) ensure a sane TTL and MSS if it’s a SYN
     p.ttl = max(p.ttl, 64)
-
-    # delete checksums so Scapy will auto‐recompute
-    if hasattr(p, "chksum"):
-        del p.chksum
-    if TCP in p and hasattr(p[TCP], "chksum"):
-        del p[TCP].chksum
-
-    # ensure there's an MSS like a normal SYN (optional)
-    if TCP in p and p[TCP].flags & 0x02:  # SYN flag set
+    if p[TCP].flags & 0x02:  # SYN?
         opts = p[TCP].options or []
         if not any(o[0] == "MSS" for o in opts):
             p[TCP].options = [("MSS", 1460)] + opts
-
-    # return raw bytes; Scapy will fill in lengths & checksums
+    # 4) let Scapy rebuild the bytes (with correct checksums)
     return bytes(p)
-
-
-_dumped = False
 
 
 def server_cb(nf_pkt: NFQPacket):
@@ -53,13 +42,7 @@ def server_cb(nf_pkt: NFQPacket):
     if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
         logging.debug("got icmp packet from tunnel")
         raw_inner = bytes(ip[ICMP].payload)
-
-        if not _dumped:
-            # dump to pcap
-            wrpcap("inner_syn.pcap", IP(raw_inner), append=False)
-            print("wrote inner_syn.pcap")
-            _dumped = True
-        fixed_inner = normalize_inner(raw_inner)
+        fixed_inner = normalize_and_nat(raw_inner)
         nf_pkt.set_payload(fixed_inner)
         nf_pkt.accept()
         return
