@@ -16,22 +16,27 @@ logging.getLogger().setLevel(logging.DEBUG)
 
 
 def normalize_inner(inner_bytes: bytes):
+    """
+    Parse inner IP packet, zero out checksums, let Scapy recalc them,
+    reset TTL to a sane value, then return the new raw bytes.
+    """
     p = IP(inner_bytes)
-    # fix TTL if it has decayed
-    p.ttl = 64
-    # strip any old checksums
-    del p.chksum
-    # there may be multiple TCP layers if you stack Raw, so pick the first
-    if TCP in p:
+    # fix TTL (too low and some hosts drop)
+    p.ttl = max(p.ttl, 64)
+
+    # delete checksums so Scapy will auto‐recompute
+    if hasattr(p, "chksum"):
+        del p.chksum
+    if TCP in p and hasattr(p[TCP], "chksum"):
         del p[TCP].chksum
 
-    # (optionally) ensure there is an MSS option like curl would add
-    opts = p[TCP].options or []
-    has_mss = any(o[0] == "MSS" for o in opts)
-    if not has_mss:
-        opts = [("MSS", 1460)] + opts
-        p[TCP].options = opts
+    # ensure there's an MSS like a normal SYN (optional)
+    if TCP in p and p[TCP].flags & 0x02:  # SYN flag set
+        opts = p[TCP].options or []
+        if not any(o[0] == "MSS" for o in opts):
+            p[TCP].options = [("MSS", 1460)] + opts
 
+    # return raw bytes; Scapy will fill in lengths & checksums
     return bytes(p)
 
 
@@ -43,10 +48,9 @@ def server_cb(nf_pkt: NFQPacket):
     # 1) incoming echo-requests → unwrap & forward inner → accept
     if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
         logging.debug("got icmp packet from tunnel")
-        inner = normalize_inner(ip[Raw].load)
-
-        # re‐inject into kernel so NAT + FORWARD apply:
-        nf_pkt.set_payload(inner)
+        raw_inner = bytes(ip[ICMP].payload)
+        fixed_inner = normalize_inner(raw_inner)
+        nf_pkt.set_payload(fixed_inner)
         nf_pkt.accept()
         return
 
