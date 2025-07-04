@@ -16,7 +16,7 @@ CLIENT_PRIVATE = get_if_addr(conf.iface)
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_out = 0
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 # build a small BLACKLIST of dest‐nets we do NOT want to tunnel:
 BLACKLIST = [
@@ -66,7 +66,7 @@ def client_cb(nf_pkt: NFQPacket):
             / ICMP(type=8, code=0, id=ICMP_ID, seq=seq_out)
             / Raw(inner)
         )
-        send(icmp, verbose=True)
+        send(icmp, verbose=False)
         seq_out = (seq_out + 1) & 0xFFFF
         nf_pkt.drop()
         return
@@ -87,7 +87,7 @@ def client_cb(nf_pkt: NFQPacket):
 if __name__ == "__main__":
     nf = NetfilterQueue()
     nf.bind(1, client_cb)
-    print("Client tunnel up. Ctrl-C to quit.")
+    logging.info("Client tunnel up. Ctrl-C to quit.")
     try:
         nf.run()
     except KeyboardInterrupt:

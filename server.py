@@ -12,7 +12,7 @@ CLIENT_IP = "192.168.1.152"
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_reply = 0
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 
 def normalize_and_nat(inner_bytes):
@@ -80,7 +80,7 @@ def server_cb(nf_pkt: NFQPacket):
 if __name__ == "__main__":
     nf = NetfilterQueue()
     nf.bind(1, server_cb)
-    print("Server tunnel up. Ctrl-C to quit.")
+    logging.info("Server tunnel up. Ctrl-C to quit.")
     try:
         nf.run()
     except KeyboardInterrupt:
