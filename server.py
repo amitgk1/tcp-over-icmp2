@@ -3,7 +3,7 @@ import logging
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send, wrpcap
+from scapy.all import Raw, conf, get_if_addr, send
 from scapy.layers.inet import ICMP, IP, TCP
 
 SERVER_IP = get_if_addr(conf.iface)
@@ -16,21 +16,32 @@ logging.getLogger().setLevel(logging.DEBUG)
 
 
 def normalize_and_nat(inner_bytes):
+    """
+    Parse the inner IP packet, rewrite src → SERVER_PUBLIC,
+    drop old checksums, let Scapy rebuild them, return bytes().
+    """
     p = IP(inner_bytes)
-    # 1) rewrite to server’s public IP (and preserve the client’s port)
+    # 1) NAT: set the src to your public IP
     p.src = SERVER_IP
-    # 2) clear all old lengths & checksums so Scapy will recalc
-    del p.len, p.chksum
-    del p[TCP].chksum
-    # 3) ensure a sane TTL and MSS if it’s a SYN
+    # 2) clear length & checksum so Scapy will recalc
+    if hasattr(p, "len"):
+        del p.len
+    if hasattr(p, "chksum"):
+        del p.chksum
+
+    # 3) if it's TCP, clear its checksum too and maybe fix options
+    if TCP in p:
+        del p[TCP].chksum
+        # if it's a SYN, ensure it has an MSS option
+        if p[TCP].flags & 0x02:  # SYN flag
+            opts = p[TCP].options or []
+            if not any(o[0] == "MSS" for o in opts):
+                p[TCP].options = [("MSS", 1460)] + opts
+
+    # 4) reset TTL
     p.ttl = max(p.ttl, 64)
-    if p[TCP].flags & 0x02:  # SYN?
-        opts = p[TCP].options or []
-        if not any(o[0] == "MSS" for o in opts):
-            p[TCP].options = [("MSS", 1460)] + opts
-    # 4) let Scapy rebuild the bytes (with correct checksums)
-    wrpcap("after_normalize.pcap", p)
-    return bytes(p)
+
+    return p
 
 
 def server_cb(nf_pkt: NFQPacket):
@@ -41,10 +52,11 @@ def server_cb(nf_pkt: NFQPacket):
     # 1) incoming echo-requests → unwrap & forward inner → accept
     if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
         logging.debug("got icmp packet from tunnel")
-        raw_inner = bytes(ip[ICMP].payload)
-        fixed_inner = normalize_and_nat(raw_inner)
-        nf_pkt.set_payload(fixed_inner)
-        nf_pkt.accept()
+        inner = bytes(ip[ICMP].payload)
+        fixed = normalize_and_nat(inner)
+        # send it straight out via raw socket
+        send(fixed, verbose=False)
+        nf_pkt.drop()
         return
 
     logging.debug(f"incoming ip packet {ip.summary()}")
