@@ -3,7 +3,7 @@ import logging
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send
+from scapy.all import Raw, conf, get_if_addr, send, wrpcap
 from scapy.layers.inet import ICMP, IP, TCP
 
 SERVER_IP = get_if_addr(conf.iface)
@@ -40,7 +40,11 @@ def normalize_inner(inner_bytes: bytes):
     return bytes(p)
 
 
+_dumped = False
+
+
 def server_cb(nf_pkt: NFQPacket):
+    global _dumped
     global seq_reply
     raw = nf_pkt.get_payload()
     ip = IP(raw)
@@ -49,6 +53,12 @@ def server_cb(nf_pkt: NFQPacket):
     if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
         logging.debug("got icmp packet from tunnel")
         raw_inner = bytes(ip[ICMP].payload)
+
+        if not _dumped:
+            # dump to pcap
+            wrpcap("inner_syn.pcap", IP(raw_inner), append=False)
+            print("wrote inner_syn.pcap")
+            _dumped = True
         fixed_inner = normalize_inner(raw_inner)
         nf_pkt.set_payload(fixed_inner)
         nf_pkt.accept()
