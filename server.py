@@ -40,12 +40,22 @@ def start_worker(qnum: int, callback):
         nf.unbind()
 
 
+def clamp_mss(pkt: IP, mss: int = 1000):
+    """If pkt is TCP-SYN, replace any MSS with our small one."""
+    if TCP in pkt and (pkt[TCP].flags & 0x2):  # SYN
+        opts = pkt[TCP].options or []
+        opts = [o for o in opts if o[0] != "MSS"]
+        opts.insert(0, ("MSS", mss))
+        pkt[TCP].options = opts
+
+
 def normalize_and_forward(inner: bytes):
     """
     Rewrite src→SERVER_PUBLIC, clamp MSS on SYN,
     recalc checksums, and raw‐send to the real target.
     """
     p = cast(IP, IP(inner))
+    clamp_mss(p)
     p.src = SERVER_IP
     # clear old fields so Scapy fixes them
     del p.len, p.chksum

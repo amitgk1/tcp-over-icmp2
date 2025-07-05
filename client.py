@@ -47,7 +47,7 @@ def start_worker(qnum: int, callback):
 
 
 def normalize_and_nat_local(inner: bytes) -> bytes:
-    """Re‐write dst→CLIENT_PRIVATE, clamp MSS on SYN-ACK, recalc checksums."""
+    """Re‐write dst→CLIENT_PRIVATE, recalc checksums."""
     p = cast(IP, IP(inner))
     p.dst = CLIENT_PRIVATE
     # force recompute
