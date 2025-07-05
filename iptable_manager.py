@@ -40,7 +40,7 @@ class IPTablesManager:
             )
         else:
             icmp_target.set_parameter(
-                "queue-num", tunnel_queue_options.icmp.queue_number_range.start
+                "queue-num", str(tunnel_queue_options.icmp.queue_number_range.start)
             )
 
         tcp_target = tunnel_rules.tcp.rule.create_target("NFQUEUE")
@@ -51,7 +51,7 @@ class IPTablesManager:
             )
         else:
             tcp_target.set_parameter(
-                "queue-num", tunnel_queue_options.icmp.queue_number_range.stop
+                "queue-num", str(tunnel_queue_options.icmp.queue_number_range.stop)
             )
         self.tunnel_rules = tunnel_rules
 
