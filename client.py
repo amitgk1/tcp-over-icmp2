@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import ipaddress
 import logging
+import socket
+import threading
 from typing import cast
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send
-from scapy.layers.inet import ICMP, IP
+from scapy.all import Raw, conf, get_if_addr
+from scapy.layers.inet import ICMP, IP, TCP
 
 # your server’s public IP (the decap box)
 SERVER_IP = "192.168.1.61"
@@ -15,6 +17,9 @@ CLIENT_PRIVATE = get_if_addr(conf.iface)
 # ID for our echo messages
 ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
 seq_out = 0
+
+# ICMP socket for echo-requests
+sock_icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -26,20 +31,27 @@ BLACKLIST = [
     # ipaddress.ip_network(SERVER_IP + "/32"),  # the tunnel server itself
 ]
 
+NUM_QUEUES = 4
 
-def normalize_for_local(inner_bytes: bytes):
-    p = IP(inner_bytes)
-    # rewrite the dst to your private client IP
-    p.dst = CLIENT_PRIVATE
-    # delete old length/checksums so Scapy recalcs them
-    del p.len, p.chksum
-    if p.haslayer(Raw):  # strip Raw so checksums get recomputed
+
+def start_worker(qnum: int, callback):
+    nf = NetfilterQueue()
+    nf.bind(qnum, callback, max_len=4096)
+    try:
+        nf.run()
+    except KeyboardInterrupt:
         pass
-    if p.haslayer(IP):
-        # ensure TCP checksum is also cleared
-        if p.haslayer("TCP"):
-            del p["TCP"].chksum
-    # you can also reset ttl if you like
+    finally:
+        nf.unbind()
+
+
+def normalize_and_nat_local(inner: bytes) -> bytes:
+    """Re‐write dst→CLIENT_PRIVATE, clamp MSS on SYN-ACK, recalc checksums."""
+    p = cast(IP, IP(inner))
+    p.dst = CLIENT_PRIVATE
+    # force recompute
+    del p.len, p.chksum
+    del p[TCP].chksum
     p.ttl = max(p.ttl, 64)
     return bytes(p)
 
@@ -59,14 +71,11 @@ def client_cb(nf_pkt: NFQPacket):
 
     # 1) Outgoing TCP → wrap in ICMP echo‐request
     if should_wrap_tcp(ip):
-        logging.debug(f"outgoing tcp packet {ip.summary()}")
-        inner = raw
         icmp = (
-            IP(dst=SERVER_IP)
-            / ICMP(type=8, code=0, id=ICMP_ID, seq=seq_out)
-            / Raw(inner)
+            IP(dst=SERVER_IP) / ICMP(type=8, code=0, id=ICMP_ID, seq=seq_out) / Raw(raw)
         )
-        send(icmp, verbose=False)
+
+        sock_icmp.sendto(bytes(icmp), (SERVER_IP, 0))
         seq_out = (seq_out + 1) & 0xFFFF
         nf_pkt.drop()
         return
@@ -75,7 +84,7 @@ def client_cb(nf_pkt: NFQPacket):
     if ip.proto == 1 and ip[ICMP].type == 0 and ip[ICMP].id == ICMP_ID:
         logging.debug("incoming icmp reply with tunnel code")
         inner = bytes(ip[ICMP].payload)
-        fixed = normalize_for_local(inner)
+        fixed = normalize_and_nat_local(inner)
         nf_pkt.set_payload(fixed)
         nf_pkt.accept()
         return
@@ -85,12 +94,14 @@ def client_cb(nf_pkt: NFQPacket):
 
 
 if __name__ == "__main__":
-    nf = NetfilterQueue()
-    nf.bind(1, client_cb)
-    logging.info("Client tunnel up. Ctrl-C to quit.")
+    threads = [
+        threading.Thread(target=start_worker, args=(q, client_cb), daemon=True)
+        for q in range(NUM_QUEUES)
+    ]
     try:
-        nf.run()
-    except KeyboardInterrupt:
-        pass
+        logging.info("Client tunnel up. Ctrl-C to quit.")
+        for t in threads:
+            t.start()
     finally:
-        nf.unbind()
+        for t in threads:
+            t.join()

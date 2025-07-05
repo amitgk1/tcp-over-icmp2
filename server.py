@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import logging
+import socket
+import threading
+from typing import cast
 
 from netfilterqueue import NetfilterQueue
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr, send
+from scapy.all import Raw, conf, get_if_addr
 from scapy.layers.inet import ICMP, IP, TCP
 
 SERVER_IP = get_if_addr(conf.iface)
@@ -14,34 +17,40 @@ seq_reply = 0
 
 logging.getLogger().setLevel(logging.INFO)
 
+# ICMP socket for echo-reply
+sock_icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
 
-def normalize_and_nat(inner_bytes):
+# RAW IP socket for forwarding the unwrapped inner packet
+sock_ip = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+# tell kernel we include our own IP header
+sock_ip.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+
+NUM_QUEUES = 4
+
+
+def start_worker(qnum: int, callback):
+    nf = NetfilterQueue()
+    nf.bind(qnum, callback, max_len=4096)
+    try:
+        nf.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        nf.unbind()
+
+
+def normalize_and_forward(inner: bytes):
     """
-    Parse the inner IP packet, rewrite src → SERVER_PUBLIC,
-    drop old checksums, let Scapy rebuild them, return bytes().
+    Rewrite src→SERVER_PUBLIC, clamp MSS on SYN,
+    recalc checksums, and raw‐send to the real target.
     """
-    p = IP(inner_bytes)
-    # 1) NAT: set the src to your public IP
+    p = cast(IP, IP(inner))
     p.src = SERVER_IP
-    # 2) clear length & checksum so Scapy will recalc
-    if hasattr(p, "len"):
-        del p.len
-    if hasattr(p, "chksum"):
-        del p.chksum
-
-    # 3) if it's TCP, clear its checksum too and maybe fix options
-    if TCP in p:
-        del p[TCP].chksum
-        # if it's a SYN, ensure it has an MSS option
-        if p[TCP].flags & 0x02:  # SYN flag
-            opts = p[TCP].options or []
-            if not any(o[0] == "MSS" for o in opts):
-                p[TCP].options = [("MSS", 1460)] + opts
-
-    # 4) reset TTL
+    # clear old fields so Scapy fixes them
+    del p.len, p.chksum
+    del p[TCP].chksum
     p.ttl = max(p.ttl, 64)
-
-    return p
+    sock_ip.sendto(bytes(p), (p.dst, 0))
 
 
 def server_cb(nf_pkt: NFQPacket):
@@ -50,16 +59,17 @@ def server_cb(nf_pkt: NFQPacket):
     ip = IP(raw)
 
     # 1) incoming echo-requests → unwrap & forward inner → accept
-    if ip.proto == 1 and ip[ICMP].type == 8 and ip[ICMP].id == ICMP_ID:
-        logging.debug("got icmp packet from tunnel")
+    if (
+        ip.proto == 1
+        and ip.haslayer(ICMP)
+        and ip[ICMP].type == 8
+        and ip[ICMP].id == ICMP_ID
+    ):
         inner = bytes(ip[ICMP].payload)
-        fixed = normalize_and_nat(inner)
-        # send it straight out via raw socket
-        send(fixed, verbose=False)
+        normalize_and_forward(inner)
         nf_pkt.drop()
         return
 
-    logging.debug(f"incoming ip packet {ip.summary()}")
     # 2) forwarded TCP replies to client‐inner → wrap & send back, drop
     if ip.proto == 6 and ip.dst == SERVER_IP:
         logging.debug(f"got response from target, sending to {CLIENT_IP}")
@@ -68,7 +78,7 @@ def server_cb(nf_pkt: NFQPacket):
             / ICMP(type=0, code=0, id=ICMP_ID, seq=seq_reply)
             / Raw(raw)
         )
-        send(icmp, verbose=False)
+        sock_icmp.sendto(bytes(icmp), (CLIENT_IP, 0))
         seq_reply = (seq_reply + 1) & 0xFFFF
         nf_pkt.drop()
         return
@@ -78,12 +88,14 @@ def server_cb(nf_pkt: NFQPacket):
 
 
 if __name__ == "__main__":
-    nf = NetfilterQueue()
-    nf.bind(1, server_cb)
-    logging.info("Server tunnel up. Ctrl-C to quit.")
+    threads = [
+        threading.Thread(target=start_worker, args=(q, server_cb), daemon=True)
+        for q in range(NUM_QUEUES)
+    ]
     try:
-        nf.run()
-    except KeyboardInterrupt:
-        pass
+        logging.info("Server tunnel up. Ctrl-C to quit.")
+        for t in threads:
+            t.start()
     finally:
-        nf.unbind()
+        for t in threads:
+            t.join()
