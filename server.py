@@ -19,6 +19,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 # ICMP socket for echo-reply
 sock_icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+sock_icmp.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
 # RAW IP socket for forwarding the unwrapped inner packet
 sock_ip = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)

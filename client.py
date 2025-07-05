@@ -20,6 +20,7 @@ seq_out = 0
 
 # ICMP socket for echo-requests
 sock_icmp = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+sock_icmp.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
 logging.getLogger().setLevel(logging.INFO)
 
