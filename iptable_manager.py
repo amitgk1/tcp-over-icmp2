@@ -33,7 +33,7 @@ class IPTablesManager:
         self.table.autocommit = False
 
         icmp_target = tunnel_rules.icmp.rule.create_target("NFQUEUE")
-        if len(tunnel_queue_options.icmp) > 1:
+        if len(tunnel_queue_options.icmp.queue_number_range) > 1:
             icmp_target.set_parameter(
                 "queue-balance",
                 f"{tunnel_queue_options.icmp.queue_number_range.start}:{tunnel_queue_options.icmp.queue_number_range.stop - 1}",
@@ -44,7 +44,7 @@ class IPTablesManager:
             )
 
         tcp_target = tunnel_rules.tcp.rule.create_target("NFQUEUE")
-        if len(tunnel_queue_options.tcp) > 1:
+        if len(tunnel_queue_options.tcp.queue_number_range) > 1:
             tcp_target.set_parameter(
                 "queue-balance",
                 f"{tunnel_queue_options.icmp.queue_number_range.stop}:{tunnel_queue_options.icmp.queue_number_range.stop + tunnel_queue_options.tcp.queue_number_range.stop - 1}",
