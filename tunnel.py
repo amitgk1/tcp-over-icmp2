@@ -108,7 +108,7 @@ class Tunnel:
                 ),
                 daemon=True,
             )
-            for q in self.queue_options.icmp
+            for q in self.queue_options.icmp.queue_number_range
         ]
         tcp_threads = [
             threading.Thread(
@@ -120,7 +120,7 @@ class Tunnel:
                 ),
                 daemon=True,
             )
-            for q in self.queue_options.tcp
+            for q in self.queue_options.tcp.queue_number_range
         ]
         all_threads = itertools.chain(icmp_threads, tcp_threads)
         for t in all_threads:
