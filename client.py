@@ -31,7 +31,7 @@ NUM_QUEUES = 4
 
 
 class ClientPacketHandler(PacketHandler):
-    def __init__(self, server_ip: ipaddress.IPv4Address) -> None:
+    def __init__(self, server_ip: str) -> None:
         super().__init__()
         self.server_ip = server_ip
 
@@ -123,10 +123,10 @@ def should_wrap_tcp(ip_pkt: IP) -> bool:
 if __name__ == "__main__":
     parser = Tunnel.generate_common_arg_parser()
     parser.add_argument(
-        "server_ip", type=ipaddress.IPv4Address, help="ip address of the client"
+        "server_ip", type=ipaddress.IPv4Address, help="ip address of the server"
     )
     args = parser.parse_args()
-    client = ClientPacketHandler(args.server_ip)
+    client = ClientPacketHandler(str(args.server_ip))
     tunnel = Tunnel(
         client.get_rules(), Tunnel.parser_args_to_tunnel_options(args), client
     )

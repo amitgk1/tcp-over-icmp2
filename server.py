@@ -19,7 +19,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 
 class ServerPacketHandler(PacketHandler):
-    def __init__(self, client_ip) -> None:
+    def __init__(self, client_ip: str) -> None:
         super().__init__()
         self.client_ip = client_ip
         # ICMP socket for echo-reply
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         "client_ip", type=ipaddress.IPv4Address, help="ip address of the client"
     )
     args = parser.parse_args()
-    server = ServerPacketHandler(args.client_ip)
+    server = ServerPacketHandler(str(args.client_ip))
     tunnel = Tunnel(
         server.get_rules(), Tunnel.parser_args_to_tunnel_options(args), server
     )
