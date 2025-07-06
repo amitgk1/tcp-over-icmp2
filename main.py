@@ -14,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     common_parser = Tunnel.generate_common_arg_parser()
+    common_parser.add_argument(
+        "--log-level",
+        choices=logging.getLevelNamesMapping().keys(),
+        default="INFO",
+        help="Set the logging level (default: INFO)",
+    )
 
     parser = argparse.ArgumentParser(
         description="TCP-over-ICMP Tunnel CLI APP",
@@ -30,7 +36,7 @@ def parse_args():
         help="Run as the server (Proxy)",
     )
     server_parser.add_argument(
-        "--client_ip",
+        "--client-ip",
         type=ipaddress.IPv4Address,
         required=True,
         help="The IP address of the client to connect to.",
@@ -41,18 +47,12 @@ def parse_args():
         help="Run as the client",
     )
     client_parser.add_argument(
-        "--server_ip",
+        "--server-ip",
         type=ipaddress.IPv4Address,
         required=True,
         help="The IP address of the server to connect to.",
     )
 
-    parser.add_argument(
-        "--log-level",
-        choices=logging.getLevelNamesMapping().keys(),
-        default="INFO",
-        help="Set the logging level (default: INFO)",
-    )
     args = parser.parse_args()
     return args
 

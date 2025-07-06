@@ -1,9 +1,6 @@
 import argparse
-import atexit
 import itertools
 import logging
-import signal
-import sys
 import threading
 from abc import ABC, abstractmethod
 from typing import Callable
@@ -62,7 +59,7 @@ class Tunnel:
 
     @staticmethod
     def generate_common_arg_parser():
-        parser = argparse.ArgumentParser()
+        parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument(
             "--tcp-thread-count",
             default=1,
