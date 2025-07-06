@@ -60,9 +60,11 @@ class IPTablesManager:
             c = iptc.Chain(self.table, chain)
             c.insert_rule(rule)
         self.table.commit()
+        self.table.refresh()
 
     def stop(self):
         for chain, rule in reversed(self.tunnel_rules):
             c = iptc.Chain(self.table, chain)
             c.delete_rule(rule)
         self.table.commit()
+        self.table.refresh()
