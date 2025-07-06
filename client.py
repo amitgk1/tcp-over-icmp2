@@ -57,8 +57,6 @@ class ClientPacketHandler(PacketHandler):
         tcp_rule = iptc.Rule()
         tcp_rule.protocol = "tcp"
         tcp_rule.dst = "!127.0.0.1/8"
-        connection_match = tcp_rule.create_match("conntrack")
-        connection_match.ctstate = "NEW,ESTABLISHED"
         return TunnelIPTablesRules(
             icmp=(IPTableRule(chain="PREROUTING", rule=icmp_rule)),
             tcp=(IPTableRule(chain="OUTPUT", rule=tcp_rule)),
