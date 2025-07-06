@@ -15,6 +15,8 @@ from iptable_manager import (
     TunnelNetFilterQueueOptions,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def positive_int(value):
     """
@@ -46,13 +48,14 @@ class PacketHandler(ABC):
 class Tunnel:
     def __init__(
         self,
-        tunnel_rules: TunnelIPTablesRules,
         tunnel_queue_options: TunnelNetFilterQueueOptions,
         packet_handler: PacketHandler,
     ) -> None:
         self.packet_handler = packet_handler
         self.queue_options = tunnel_queue_options
-        self.iptables_manager = IPTablesManager(tunnel_rules, tunnel_queue_options)
+        self.iptables_manager = IPTablesManager(
+            self.packet_handler.get_rules(), tunnel_queue_options
+        )
 
     @staticmethod
     def generate_common_arg_parser():
@@ -85,7 +88,7 @@ class Tunnel:
 
     @staticmethod
     def parser_args_to_tunnel_options(args):
-        return TunnelNetFilterQueueOptions(
+        tunnel_options = TunnelNetFilterQueueOptions(
             icmp=NetFilterQueueOptions(
                 queue_number_range=range(args.icmp_thread_count),
                 max_queue_size=args.icmp_queue_size,
@@ -98,6 +101,8 @@ class Tunnel:
                 max_queue_size=args.tcp_queue_size,
             ),
         )
+        logger.debug("parsed tunnel options: %s", tunnel_options)
+        return tunnel_options
 
     def start(self):
         self.iptables_manager.start()
@@ -129,10 +134,12 @@ class Tunnel:
 
         for t in itertools.chain(icmp_threads, tcp_threads):
             t.start()
+        logger.info("Tunnel is up!")
 
         # block until stopped
         for t in itertools.chain(icmp_threads, tcp_threads):
             t.join()
+        logger.info("Tunnel is down.")
 
     def cleanup(self):
         self.iptables_manager.stop()
@@ -143,13 +150,17 @@ class Tunnel:
         callback: Callable[[NetfilterQueuePacket], None],
         q_size: int,
     ):
-        logging.info(f"starting binding on q_num: {q_num}")
+        logger.debug("starting binding on q_num: %d with size %d", q_num, q_size)
         nf = NetfilterQueue()
         nf.bind(q_num, callback, max_len=q_size)
         try:
             nf.run()
-            logging.info("shouldn't get here...")
         except KeyboardInterrupt:
-            pass
+            logger.debug("Ctrl+C pressed - Shutting down NFQUEUE %d thread")
+        except Exception:
+            logger.exception(
+                "error on queue thread %d. This will cause dropped packets", q_num
+            )
         finally:
             nf.unbind()
+            logger.debug("unbind q_num: %d", q_num)

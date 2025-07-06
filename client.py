@@ -6,34 +6,22 @@ from typing import cast, override
 
 import iptc
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr
+from scapy.all import conf, get_if_addr
 from scapy.layers.inet import ICMP, IP, TCP
 
 from iptable_manager import IPTableRule, TunnelIPTablesRules
+from logger import setup_logging
 from tunnel import PacketHandler, Tunnel
+from tunnel_packet import CLIENT_FLAG, ICMP_ECHO_REQUEST, SERVER_FLAG, TunnelPacket
 
 CLIENT_PRIVATE = get_if_addr(conf.iface)
-
-# ID for our echo messages
-ICMP_ID = 0x1234  # os.getpid() & 0xFFFF
-
-logging.getLogger().setLevel(logging.INFO)
-
-# build a small BLACKLIST of dest‐nets we do NOT want to tunnel:
-BLACKLIST = [
-    ipaddress.ip_network("127.0.0.0/8"),  # lo
-    # ipaddress.ip_network("10.0.0.0/8"),  # private
-    # ipaddress.ip_network("192.168.0.0/16"),  # private
-    # ipaddress.ip_network(SERVER_IP + "/32"),  # the tunnel server itself
-]
-
-NUM_QUEUES = 4
 
 
 class ClientPacketHandler(PacketHandler):
     def __init__(self, server_ip: str) -> None:
         super().__init__()
         self.server_ip = server_ip
+        self.logger = logging.getLogger(__name__)
 
         # ICMP socket for echo-requests
         self.sock_icmp = socket.socket(
@@ -42,35 +30,37 @@ class ClientPacketHandler(PacketHandler):
         self.sock_icmp.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
     def cleanup(self):
+        self.logger.debug("cleaning up client icmp socket")
         self.sock_icmp.close()
 
     @override
     def get_rules(self):
-        # PREROUTING: ICMP echo-reply → NFQUEUE
+        # PREROUTING: ICMP echo-reply
         icmp_rule = iptc.Rule()
         icmp_rule.protocol = "icmp"
         m = iptc.Match(icmp_rule, "icmp")
         m.icmp_type = "echo-reply"
         icmp_rule.add_match(m)
+        icmp = IPTableRule(chain="PREROUTING", rule=icmp_rule)
 
-        # OUTPUT: TCP !127.0.0.0/8 → NFQUEUE
+        # OUTPUT: TCP !127.0.0.0/8
         tcp_rule = iptc.Rule()
         tcp_rule.protocol = "tcp"
         tcp_rule.dst = "!127.0.0.1/8"
-        return TunnelIPTablesRules(
-            icmp=(IPTableRule(chain="PREROUTING", rule=icmp_rule)),
-            tcp=(IPTableRule(chain="OUTPUT", rule=tcp_rule)),
-        )
+        tcp = IPTableRule(chain="OUTPUT", rule=tcp_rule)
+        return TunnelIPTablesRules(icmp=icmp, tcp=tcp)
 
     @override
     def handle_icmp(self, nf_pkt: NFQPacket) -> None:
-        # 2) Incoming ICMP echo‐reply → unwrap & inject
-        raw = nf_pkt.get_payload()
-        ip = cast(IP, IP(raw))
+        """
+        Incoming ICMP echo-reply → unwrap & inject
+        """
 
-        if ip.proto == 1 and ip[ICMP].type == 0 and ip[ICMP].id == ICMP_ID:
-            logging.debug("incoming icmp reply with tunnel code")
-            inner = bytes(ip[ICMP].payload)
+        raw = nf_pkt.get_payload()
+        inner = TunnelPacket.parse_icmp_packet(raw, expected_flag=SERVER_FLAG)
+
+        if inner:
+            self.logger.debug("incoming icmp reply with tunnel code")
             fixed = normalize_and_nat_local(inner)
             nf_pkt.set_payload(fixed)
             nf_pkt.accept()
@@ -81,26 +71,27 @@ class ClientPacketHandler(PacketHandler):
 
     @override
     def handle_tcp(self, nf_pkt: NFQPacket) -> None:
+        self.logger.debug("outgoing tcp packet")
         raw = nf_pkt.get_payload()
-        ip = cast(IP, IP(raw))
 
-        # 1) Outgoing TCP → wrap in ICMP echo‐request
-        if should_wrap_tcp(ip):
-            icmp = (
-                IP(dst=self.server_ip)
-                / ICMP(type=8, code=0, id=ICMP_ID, seq=next(self.seq_count))
-                / Raw(raw)
+        icmp = (
+            IP(dst=self.server_ip)
+            / ICMP(
+                type=ICMP_ECHO_REQUEST,
+                code=0,
+                id=TunnelPacket.ICMP_ID,
+                seq=next(self.seq_count),
             )
+            / TunnelPacket.from_tcp_bytes_to_tunnel_bytes(raw, flag=CLIENT_FLAG)
+        )
 
-            self.sock_icmp.sendto(bytes(icmp), (self.server_ip, 0))
-            nf_pkt.drop()
-            return
-
-        nf_pkt.accept()
+        self.sock_icmp.sendto(bytes(icmp), (self.server_ip, 0))
+        nf_pkt.drop()
+        return
 
 
 def normalize_and_nat_local(inner: bytes) -> bytes:
-    """Re‐write dst→CLIENT_PRIVATE, recalc checksums."""
+    """Re-write dst→CLIENT_PRIVATE, recalc checksums."""
     p = cast(IP, IP(inner))
     p.dst = CLIENT_PRIVATE
     # force recompute
@@ -110,29 +101,24 @@ def normalize_and_nat_local(inner: bytes) -> bytes:
     return bytes(p)
 
 
-def should_wrap_tcp(ip_pkt: IP) -> bool:
-    # Only IPv4 TCP, dest not in BLACKLIST
-    if ip_pkt.proto != 6:
-        return False
-    dst = ipaddress.IPv4Address(ip_pkt.dst)
-    return not any(dst in net for net in BLACKLIST)
-
-
 if __name__ == "__main__":
     parser = Tunnel.generate_common_arg_parser()
     parser.add_argument(
         "server_ip", type=ipaddress.IPv4Address, help="ip address of the server"
     )
-    args = parser.parse_args()
-    client = ClientPacketHandler(str(args.server_ip))
-    tunnel = Tunnel(
-        client.get_rules(), Tunnel.parser_args_to_tunnel_options(args), client
+    parser.add_argument(
+        "--log-level",
+        choices=logging.getLevelNamesMapping().keys(),
+        default="INFO",
+        help="Set the logging level (default: INFO)",
     )
+    args = parser.parse_args()
+
+    setup_logging(args.log_level)
+    client = ClientPacketHandler(str(args.server_ip))
+    tunnel = Tunnel(Tunnel.parser_args_to_tunnel_options(args), client)
     try:
         tunnel.start()
-    except KeyboardInterrupt:
-        pass
     finally:
-        logging.info("Shutting down...")
         client.cleanup()
         tunnel.cleanup()

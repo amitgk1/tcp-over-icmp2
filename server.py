@@ -6,22 +6,22 @@ from typing import cast, override
 
 import iptc
 from netfilterqueue import Packet as NFQPacket
-from scapy.all import Raw, conf, get_if_addr
+from scapy.all import conf, get_if_addr
 from scapy.layers.inet import ICMP, IP, TCP
 
 from iptable_manager import IPTableRule, TunnelIPTablesRules
+from logger import setup_logging
 from tunnel import PacketHandler, Tunnel
+from tunnel_packet import CLIENT_FLAG, SERVER_FLAG, TunnelPacket
 
 SERVER_IP = get_if_addr(conf.iface)
-ICMP_ID = 0x1234
-
-logging.getLogger().setLevel(logging.INFO)
 
 
 class ServerPacketHandler(PacketHandler):
     def __init__(self, client_ip: str) -> None:
         super().__init__()
         self.client_ip = client_ip
+        self.logger = logging.getLogger(__name__)
         # ICMP socket for echo-reply
         self.sock_icmp = socket.socket(
             socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP
@@ -42,35 +42,27 @@ class ServerPacketHandler(PacketHandler):
 
     @override
     def get_rules(self):
-        # PREROUTING: ICMP echo‐request → NFQUEUE
+        # PREROUTING: ICMP echo‐request
         icmp_rule = iptc.Rule()
         icmp_rule.protocol = "icmp"
         m = iptc.Match(icmp_rule, "icmp")
         m.icmp_type = "echo-request"
         icmp_rule.add_match(m)
+        icmp = IPTableRule(chain="PREROUTING", rule=icmp_rule)
 
-        # PREROUTING: any TCP→SERVER_PUBLIC → NFQUEUE
+        # PREROUTING: any TCP→SERVER_PUBLIC
         tcp_rule = iptc.Rule()
         tcp_rule.protocol = "tcp"
         tcp_rule.dst = SERVER_IP
-        return TunnelIPTablesRules(
-            icmp=(IPTableRule(chain="PREROUTING", rule=icmp_rule)),
-            tcp=(IPTableRule(chain="PREROUTING", rule=tcp_rule)),
-        )
+        tcp = IPTableRule(chain="PREROUTING", rule=tcp_rule)
+        return TunnelIPTablesRules(icmp=icmp, tcp=tcp)
 
     @override
     def handle_icmp(self, nf_pkt: NFQPacket) -> None:
         raw = nf_pkt.get_payload()
-        ip = IP(raw)
+        inner = TunnelPacket.parse_icmp_packet(raw, CLIENT_FLAG)
 
-        # 1) incoming echo-requests → unwrap & forward inner → accept
-        if (
-            ip.proto == 1
-            and ip.haslayer(ICMP)
-            and ip[ICMP].type == 8
-            and ip[ICMP].id == ICMP_ID
-        ):
-            inner = bytes(ip[ICMP].payload)
+        if inner:
             self._normalize_and_forward(inner)
             nf_pkt.drop()
             return
@@ -79,22 +71,20 @@ class ServerPacketHandler(PacketHandler):
         nf_pkt.accept()
 
     def handle_tcp(self, nf_pkt: NFQPacket) -> None:
+        """
+        forwarded TCP replies to client‐inner → wrap & send back, drop
+        """
         raw = nf_pkt.get_payload()
-        ip = IP(raw)
-        # 2) forwarded TCP replies to client‐inner → wrap & send back, drop
-        if ip.proto == 6 and ip.dst == SERVER_IP:
-            logging.debug(f"got response from target, sending to {self.client_ip}")
-            icmp = (
-                IP(dst=self.client_ip)
-                / ICMP(type=0, code=0, id=ICMP_ID, seq=next(self.seq_count))
-                / Raw(raw)
-            )
-            self.sock_icmp.sendto(bytes(icmp), (self.client_ip, 0))
-            nf_pkt.drop()
-            return
 
-        # otherwise pass through
-        nf_pkt.accept()
+        self.logger.debug(f"got response from target, sending to {self.client_ip}")
+        icmp = (
+            IP(dst=self.client_ip)
+            / ICMP(type=0, code=0, id=TunnelPacket.ICMP_ID, seq=next(self.seq_count))
+            / TunnelPacket.from_tcp_bytes_to_tunnel_bytes(raw, SERVER_FLAG)
+        )
+        self.sock_icmp.sendto(bytes(icmp), (self.client_ip, 0))
+        nf_pkt.drop()
+        return
 
     def clamp_mss(self, pkt: IP, mss: int = 1000):
         """If pkt is TCP-SYN, replace any MSS with our small one."""
@@ -124,16 +114,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "client_ip", type=ipaddress.IPv4Address, help="ip address of the client"
     )
-    args = parser.parse_args()
-    server = ServerPacketHandler(str(args.client_ip))
-    tunnel = Tunnel(
-        server.get_rules(), Tunnel.parser_args_to_tunnel_options(args), server
+    parser.add_argument(
+        "--log-level",
+        choices=logging.getLevelNamesMapping().keys(),
+        default="INFO",
+        help="Set the logging level (default: INFO)",
     )
+    args = parser.parse_args()
+    setup_logging(args.log_level)
+    server = ServerPacketHandler(str(args.client_ip))
+    tunnel = Tunnel(Tunnel.parser_args_to_tunnel_options(args), server)
     try:
         tunnel.start()
-    except KeyboardInterrupt:
-        pass
     finally:
-        logging.info("Shutting down...")
         server.cleanup()
         tunnel.cleanup()

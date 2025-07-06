@@ -1,6 +1,11 @@
+import logging
+import sys
 from typing import NamedTuple
 
 import iptc
+import iptc.easy
+
+logger = logging.getLogger(__name__)
 
 
 class IPTableRule(NamedTuple):
@@ -56,15 +61,33 @@ class IPTablesManager:
         self.tunnel_rules = tunnel_rules
 
     def start(self):
+        logger.info("setting iptables rules...")
         for chain, rule in self.tunnel_rules:
             c = iptc.Chain(self.table, chain)
+            logger.debug(
+                "Inserting rule %s in chain %s", iptc.easy.decode_iptc_rule(rule), chain
+            )
             c.insert_rule(rule)
-        self.table.commit()
-        self.table.refresh()
+        try:
+            self.table.commit()
+            self.table.refresh()
+            logger.info("successfully installed iptables rules")
+        except Exception:
+            logger.exception("failed to apply iptables rules")
+            sys.exit(0)
 
     def stop(self):
+        logger.info("cleaning up iptables rules...")
         for chain, rule in reversed(self.tunnel_rules):
             c = iptc.Chain(self.table, chain)
+            logger.debug(
+                "removing rule %s in chain %s", iptc.easy.decode_iptc_rule(rule), chain
+            )
             c.delete_rule(rule)
-        self.table.commit()
-        self.table.refresh()
+        try:
+            self.table.commit()
+            self.table.refresh()
+            logger.info("successfully removed iptables rules")
+        except Exception:
+            logger.exception("unable to remove iptables rules")
+            sys.exit(0)
