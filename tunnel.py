@@ -1,5 +1,6 @@
 import argparse
 import itertools
+import logging
 import threading
 from abc import ABC, abstractmethod
 from typing import Callable
@@ -139,10 +140,12 @@ class Tunnel:
         callback: Callable[[NetfilterQueuePacket], None],
         q_size: int,
     ):
+        logging.info(f"starting binding on q_num: {q_num}")
         nf = NetfilterQueue()
         nf.bind(q_num, callback, max_len=q_size)
         try:
             nf.run()
+            logging.info("shouldn't get here...")
         except KeyboardInterrupt:
             pass
         finally:
