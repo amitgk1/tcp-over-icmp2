@@ -3,6 +3,7 @@ import struct
 from typing import Literal, TypeAlias
 
 from scapy.layers.inet import ICMP, IP
+from scapy.packet import Raw
 
 ICMP_ECHO_REQUEST = 8
 
@@ -26,11 +27,11 @@ class TunnelPacket:
     @staticmethod
     def parse_icmp_packet(pkt: bytes, expected_flag: FLAG) -> bytes | None:
         ip = IP(pkt)
-        if not (ip[ICMP] and ip[ICMP].id == TunnelPacket.ICMP_ID):
+        if not (ip[ICMP] and ip[ICMP].id == TunnelPacket.ICMP_ID and ip[Raw]):
             logger.warning("ICMP packet id didn't match tunnel")
             return None
 
-        inner = ip[ICMP].payload
+        inner = ip[Raw].load
         if len(inner) < TunnelPacket.MAGIC_PREFIX_SIZE + 1:
             logger.warning("ICMP packet data was too short - not from tunnel")
             return None

@@ -58,7 +58,7 @@ class ServerPacketHandler(PacketHandler):
     @override
     def handle_icmp(self, nf_pkt: NFQPacket) -> None:
         raw = nf_pkt.get_payload()
-        inner = TunnelPacket.parse_icmp_packet(raw, CLIENT_FLAG)
+        inner = TunnelPacket.parse_icmp_packet(raw, expected_flag=CLIENT_FLAG)
 
         if inner:
             self._normalize_and_forward(inner)
