@@ -85,16 +85,16 @@ class Tunnel:
 
     @staticmethod
     def parser_args_to_tunnel_options(args):
-        logging.info(
-            f"ranges - icmp: {range(args.icmp_thread_count)}, tcp: {range(args.icmp_thread_count, args.tcp_thread_count)}"
-        )
         return TunnelNetFilterQueueOptions(
             icmp=NetFilterQueueOptions(
                 queue_number_range=range(args.icmp_thread_count),
                 max_queue_size=args.icmp_queue_size,
             ),
             tcp=NetFilterQueueOptions(
-                queue_number_range=range(args.icmp_thread_count, args.tcp_thread_count),
+                queue_number_range=range(
+                    args.icmp_thread_count,
+                    args.icmp_thread_count + args.tcp_thread_count,
+                ),
                 max_queue_size=args.tcp_queue_size,
             ),
         )
