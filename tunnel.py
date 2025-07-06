@@ -122,12 +122,12 @@ class Tunnel:
             )
             for q in self.queue_options.tcp.queue_number_range
         ]
-        all_threads = itertools.chain(icmp_threads, tcp_threads)
-        for t in all_threads:
+
+        for t in itertools.chain(icmp_threads, tcp_threads):
             t.start()
 
         # block until stopped
-        for t in all_threads:
+        for t in itertools.chain(icmp_threads, tcp_threads):
             t.join()
 
     def cleanup(self):
