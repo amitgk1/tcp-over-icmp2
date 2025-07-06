@@ -1,6 +1,9 @@
 import argparse
+import atexit
 import itertools
 import logging
+import signal
+import sys
 import threading
 from abc import ABC, abstractmethod
 from typing import Callable
@@ -139,10 +142,10 @@ class Tunnel:
         # block until stopped
         for t in itertools.chain(icmp_threads, tcp_threads):
             t.join()
-        logger.info("Tunnel is down.")
 
     def cleanup(self):
         self.iptables_manager.stop()
+        logger.info("Tunnel is down.")
 
     def _start_worker(
         self,
@@ -155,12 +158,9 @@ class Tunnel:
         nf.bind(q_num, callback, max_len=q_size)
         try:
             nf.run()
-        except KeyboardInterrupt:
-            logger.debug("Ctrl+C pressed - Shutting down NFQUEUE %d thread")
         except Exception:
             logger.exception(
                 "error on queue thread %d. This will cause dropped packets", q_num
             )
         finally:
             nf.unbind()
-            logger.debug("unbind q_num: %d", q_num)

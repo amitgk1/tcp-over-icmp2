@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import ipaddress
 import logging
 import socket
 from typing import cast, override
@@ -10,8 +9,7 @@ from scapy.all import conf, get_if_addr
 from scapy.layers.inet import ICMP, IP, TCP
 
 from iptable_manager import IPTableRule, TunnelIPTablesRules
-from logger import setup_logging
-from tunnel import PacketHandler, Tunnel
+from tunnel import PacketHandler
 from tunnel_packet import CLIENT_FLAG, ICMP_ECHO_REQUEST, SERVER_FLAG, TunnelPacket
 
 CLIENT_PRIVATE = get_if_addr(conf.iface)
@@ -99,26 +97,3 @@ def normalize_and_nat_local(inner: bytes) -> bytes:
     del p[TCP].chksum
     p.ttl = max(p.ttl, 64)
     return bytes(p)
-
-
-if __name__ == "__main__":
-    parser = Tunnel.generate_common_arg_parser()
-    parser.add_argument(
-        "server_ip", type=ipaddress.IPv4Address, help="ip address of the server"
-    )
-    parser.add_argument(
-        "--log-level",
-        choices=logging.getLevelNamesMapping().keys(),
-        default="INFO",
-        help="Set the logging level (default: INFO)",
-    )
-    args = parser.parse_args()
-
-    setup_logging(args.log_level)
-    client = ClientPacketHandler(str(args.server_ip))
-    tunnel = Tunnel(Tunnel.parser_args_to_tunnel_options(args), client)
-    try:
-        tunnel.start()
-    finally:
-        client.cleanup()
-        tunnel.cleanup()
