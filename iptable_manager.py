@@ -47,11 +47,11 @@ class IPTablesManager:
         if len(tunnel_queue_options.tcp.queue_number_range) > 1:
             tcp_target.set_parameter(
                 "queue-balance",
-                f"{tunnel_queue_options.icmp.queue_number_range.stop}:{tunnel_queue_options.icmp.queue_number_range.stop + tunnel_queue_options.tcp.queue_number_range.stop - 1}",
+                f"{tunnel_queue_options.icmp.queue_number_range.stop}:{tunnel_queue_options.tcp.queue_number_range.stop - 1}",
             )
         else:
             tcp_target.set_parameter(
-                "queue-num", str(tunnel_queue_options.icmp.queue_number_range.stop)
+                "queue-num", str(tunnel_queue_options.tcp.queue_number_range.start)
             )
         self.tunnel_rules = tunnel_rules
 
